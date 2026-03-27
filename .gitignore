@@ -1,0 +1,13 @@
+# Environment
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local state
+settings.json
+
+# OS
+.DS_Store
