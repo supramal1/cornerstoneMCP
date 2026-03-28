@@ -575,6 +575,7 @@ def get_context(query: str, namespace: str = "") -> str:
         return f"Error (get_context): cannot reach Cornerstone API — {e}"
 
     context_text = data.get("context", "")
+    context_request_id = data.get("context_request_id")
     stats = data.get("stats", {})
     tokens = stats.get("total_tokens", 0)
     used = stats.get("used_memory", [])
@@ -583,6 +584,8 @@ def get_context(query: str, namespace: str = "") -> str:
         summary_parts.append(
             f"\n--- {len(used)} memory items retrieved, {tokens} tokens ---"
         )
+    if context_request_id:
+        summary_parts.append(f"context_request_id: {context_request_id}")
     return "\n".join(summary_parts)
 
 
@@ -789,6 +792,79 @@ def get_recent_sessions(namespace: str = "", limit: int = 5) -> str:
         summary = (s.get("summary", "") or "")[:300]
         started = s.get("started_at", "?")
         lines.append(f"### {topic}\n{started}\n{summary}\n")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def report_context_feedback(
+    context_request_id: str,
+    quality: str = "helpful",
+    comment: str = "",
+) -> str:
+    """Report feedback on the quality of retrieved context.
+
+    After using get_context, you can report whether the context was helpful.
+    This helps Cornerstone improve retrieval over time.
+
+    Args:
+        context_request_id: The ID returned by get_context.
+        quality: "helpful", "partially_helpful", or "not_helpful".
+        comment: Optional explanation of what was good or missing.
+    """
+    valid_qualities = {"helpful", "partially_helpful", "not_helpful"}
+    if quality not in valid_qualities:
+        return f"Error: quality must be one of: {', '.join(sorted(valid_qualities))}"
+
+    try:
+        with _client() as c:
+            r = c.post(
+                "/context/feedback",
+                json={
+                    "context_request_id": context_request_id,
+                    "feedback_type": "overall",
+                    "quality": quality,
+                    "comment": comment,
+                },
+            )
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "report_context_feedback")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (report_context_feedback): cannot reach Cornerstone API — {e}"
+
+    return "Feedback recorded. Thank you."
+
+
+@mcp.tool()
+def list_threads(namespace: str = "") -> str:
+    """List conversation threads — groups of related conversations about the same topic.
+
+    Args:
+        namespace: Memory namespace (defaults to active workspace).
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+    try:
+        with _client() as c:
+            r = c.get("/memory/threads", params={"namespace": ns})
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "list_threads")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (list_threads): cannot reach Cornerstone API — {e}"
+
+    threads = data.get("threads", [])
+    if not threads:
+        return f"[workspace: {ns}] No conversation threads found."
+
+    lines = [f"[workspace: {ns}] Found {len(threads)} conversation threads:\n"]
+    for t in threads:
+        topic = t.get("topic") or "Untitled"
+        count = t.get("session_count", 1)
+        last = (t.get("last_session_at") or "")[:10]
+        lines.append(f"  {topic} ({count} sessions, last active {last})")
     return "\n".join(lines)
 
 
