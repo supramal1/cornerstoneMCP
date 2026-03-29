@@ -50,8 +50,8 @@ _SETTINGS_PATH = Path.home() / ".cornerstone" / "settings.json"
 
 def _detect_client() -> str:
     """Detect which MCP client is running this server."""
-    # Claude Code sets specific env vars and runs via stdio
-    if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_VERSION"):
+    # Claude Code sets CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
         return "claude-code"
     # Check parent process name as fallback
     try:
