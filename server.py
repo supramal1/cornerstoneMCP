@@ -44,6 +44,38 @@ _SETTINGS_PATH = Path.home() / ".cornerstone" / "settings.json"
 
 
 # ---------------------------------------------------------------------------
+# Client detection
+# ---------------------------------------------------------------------------
+
+
+def _detect_client() -> str:
+    """Detect which MCP client is running this server."""
+    # Claude Code sets specific env vars and runs via stdio
+    if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_VERSION"):
+        return "claude-code"
+    # Check parent process name as fallback
+    try:
+        import psutil
+
+        parent = psutil.Process(os.getpid()).parent()
+        if parent:
+            pname = parent.name().lower()
+            if "claude" in pname:
+                return "claude-code"
+            if "codex" in pname:
+                return "codex"
+    except Exception:
+        pass
+    # Check for common env markers
+    if os.environ.get("CODEX_CLI"):
+        return "codex"
+    if os.environ.get("CURSOR_SESSION"):
+        return "cursor"
+    # Default based on transport
+    return "mcp-client"
+
+
+# ---------------------------------------------------------------------------
 # Session buffer — fire-and-forget event recording
 # ---------------------------------------------------------------------------
 
@@ -51,9 +83,10 @@ _SETTINGS_PATH = Path.home() / ".cornerstone" / "settings.json"
 class SessionBuffer:
     """Fire-and-forget session event recording to the backend buffer."""
 
-    def __init__(self, api_url: str, api_key: str):
+    def __init__(self, api_url: str, api_key: str, client_name: str = "unknown"):
         self.api_url = api_url
         self.api_key = api_key
+        self.client_name = client_name
         self.current_session_id: str | None = None
         self._lock = threading.Lock()
 
@@ -76,6 +109,7 @@ class SessionBuffer:
                         "tool_name": tool_name,
                         "tool_params": _truncate_params(tool_params),
                         "tool_result_summary": (result_summary or "")[:300],
+                        "client_name": self.client_name,
                     },
                     timeout=5,
                 )
@@ -111,7 +145,11 @@ def _truncate_params(params: dict | None) -> dict:
     return result
 
 
-session_buffer = SessionBuffer(api_url=CORNERSTONE_URL, api_key=CORNERSTONE_API_KEY)
+session_buffer = SessionBuffer(
+    api_url=CORNERSTONE_URL,
+    api_key=CORNERSTONE_API_KEY,
+    client_name=_detect_client(),
+)
 
 
 # ---------------------------------------------------------------------------
