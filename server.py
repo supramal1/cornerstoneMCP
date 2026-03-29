@@ -1153,6 +1153,113 @@ def report_context_feedback(
 
 
 @mcp.tool()
+def save_conversation(
+    messages: list[dict],
+    topic: str | None = None,
+    namespace: str = "",
+) -> str:
+    """Save a conversation to memory. Cornerstone will extract key information,
+    create a summary, and link it to related conversations.
+
+    Call this at the end of a meaningful conversation to preserve it.
+    The AI should NOT call this for every turn — only when the user
+    explicitly asks to save the conversation, or at natural conversation
+    endpoints where the user has shared important information.
+
+    Args:
+        messages: The conversation messages as a list of dicts with
+                  "role" and "content" keys.
+                  Example: [{"role": "user", "content": "..."},
+                            {"role": "assistant", "content": "..."}]
+        topic: Optional topic name for the conversation.
+        namespace: Memory namespace (defaults to active workspace).
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+
+    if not messages:
+        return "Error: no messages provided."
+
+    # Combine messages into the ingest format.
+    # The ingest API takes user_message + assistant_response per call.
+    # We merge all user turns into user_message and all assistant turns
+    # into assistant_response to capture the full conversation in one pass.
+    user_parts: list[str] = []
+    assistant_parts: list[str] = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if not content:
+            continue
+        if role == "user":
+            user_parts.append(content)
+        elif role == "assistant":
+            assistant_parts.append(content)
+
+    if not user_parts and not assistant_parts:
+        return "Error: messages contain no user or assistant content."
+
+    user_message = "\n\n".join(user_parts) if user_parts else None
+    assistant_response = "\n\n".join(assistant_parts) if assistant_parts else None
+
+    try:
+        with _client() as c:
+            payload: dict = {
+                "user_message": user_message,
+                "assistant_response": assistant_response,
+                "namespace": ns,
+                "agent_id": DEFAULT_AGENT_ID,
+                "source": "mcp-save-conversation",
+                "force": True,
+            }
+            if topic:
+                payload["topic"] = topic
+            r = c.post("/ingest", json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "save_conversation")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (save_conversation): cannot reach Cornerstone API — {e}"
+
+    session_id = data.get("session_id", "unknown")
+    episodic = data.get("episodic_count", 0)
+    semantic = data.get("semantic_count", 0)
+    entities = data.get("entities_staged", 0)
+    relations = data.get("relations_staged", 0)
+    gated = data.get("gated", False)
+    errors = data.get("errors", [])
+
+    if gated:
+        return (
+            f"[{ns}] Conversation saved (session {session_id[:8]}...) "
+            f"but extraction was gated. Use explicit remember/add_fact "
+            f"for key items."
+        )
+
+    parts = [f"[{ns}] Conversation saved (session {session_id[:8]}...):"]
+    parts.append(f"  Episodic memories: {episodic}")
+    parts.append(f"  Semantic memories: {semantic}")
+    if entities:
+        parts.append(f"  Entities staged: {entities}")
+    if relations:
+        parts.append(f"  Relations staged: {relations}")
+    if errors:
+        parts.append(f"  Errors: {'; '.join(errors)}")
+
+    summary_note = []
+    if episodic == 0 and semantic == 0 and entities == 0:
+        summary_note.append(
+            "Note: no memories extracted. The conversation may have been too "
+            "short or lacked durable information. Use remember() or add_fact() "
+            "for specific items."
+        )
+
+    return "\n".join(parts + summary_note)
+
+
+@mcp.tool()
 def list_threads(namespace: str = "") -> str:
     """List conversation threads — groups of related conversations about the same topic.
 
