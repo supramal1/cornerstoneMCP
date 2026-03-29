@@ -556,20 +556,22 @@ def remember(content: str, type: str = "auto") -> str:
     else:
         return f"Unknown type '{type}'. Use 'auto', 'fact', or 'note'."
 
+    buf_id = session_buffer.current_session_id
+
     if memory_type == "fact":
         try:
+            payload: dict = {
+                "key": metadata["key"],
+                "value": metadata["value"],
+                "namespace": ns,
+                "category": "general",
+                "confidence": 0.9,
+                "agent_id": DEFAULT_AGENT_ID,
+            }
+            if buf_id:
+                payload["buffer_session_id"] = buf_id
             with _client() as c:
-                r = c.post(
-                    "/memory/fact",
-                    json={
-                        "key": metadata["key"],
-                        "value": metadata["value"],
-                        "namespace": ns,
-                        "category": "general",
-                        "confidence": 0.9,
-                        "agent_id": DEFAULT_AGENT_ID,
-                    },
-                )
+                r = c.post("/memory/fact", json=payload)
                 r.raise_for_status()
         except httpx.HTTPStatusError as e:
             return _format_http_error(e, "remember")
@@ -586,16 +588,16 @@ def remember(content: str, type: str = "auto") -> str:
 
     else:  # note
         try:
+            note_payload: dict = {
+                "content": metadata["content"],
+                "namespace": ns,
+                "tags": ["remember"],
+                "agent_id": DEFAULT_AGENT_ID,
+            }
+            if buf_id:
+                note_payload["buffer_session_id"] = buf_id
             with _client() as c:
-                r = c.post(
-                    "/memory/note",
-                    json={
-                        "content": metadata["content"],
-                        "namespace": ns,
-                        "tags": ["remember"],
-                        "agent_id": DEFAULT_AGENT_ID,
-                    },
-                )
+                r = c.post("/memory/note", json=note_payload)
                 r.raise_for_status()
         except httpx.HTTPStatusError as e:
             return _format_http_error(e, "remember")
@@ -1124,18 +1126,18 @@ def add_fact(
     if not ns:
         return _no_workspace_error()
     try:
+        payload: dict = {
+            "key": key,
+            "value": value,
+            "category": category,
+            "namespace": ns,
+            "confidence": confidence,
+            "agent_id": DEFAULT_AGENT_ID,
+        }
+        if session_buffer.current_session_id:
+            payload["buffer_session_id"] = session_buffer.current_session_id
         with _client() as c:
-            r = c.post(
-                "/memory/fact",
-                json={
-                    "key": key,
-                    "value": value,
-                    "category": category,
-                    "namespace": ns,
-                    "confidence": confidence,
-                    "agent_id": DEFAULT_AGENT_ID,
-                },
-            )
+            r = c.post("/memory/fact", json=payload)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -1173,16 +1175,16 @@ def add_note(content: str, tags: list[str] | None = None, namespace: str = "") -
     if not ns:
         return _no_workspace_error()
     try:
+        payload: dict = {
+            "content": content,
+            "tags": tags or [],
+            "namespace": ns,
+            "agent_id": DEFAULT_AGENT_ID,
+        }
+        if session_buffer.current_session_id:
+            payload["buffer_session_id"] = session_buffer.current_session_id
         with _client() as c:
-            r = c.post(
-                "/memory/note",
-                json={
-                    "content": content,
-                    "tags": tags or [],
-                    "namespace": ns,
-                    "agent_id": DEFAULT_AGENT_ID,
-                },
-            )
+            r = c.post("/memory/note", json=payload)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -1190,7 +1192,7 @@ def add_note(content: str, tags: list[str] | None = None, namespace: str = "") -
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         return f"Error (add_note): cannot reach Cornerstone API — {e}"
 
-    note_id = data.get("note_id", "unknown")
+    note_id = data.get("note_id") or "unknown"
     session_buffer.record(
         tool_name="add_note",
         tool_params={"content": content, "tags": tags, "namespace": namespace},
