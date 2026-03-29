@@ -1469,7 +1469,7 @@ def save_conversation(
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         return f"Error (save_conversation): cannot reach Cornerstone API — {e}"
 
-    session_id = data.get("session_id", "unknown")
+    session_id = data.get("session_id") or "unknown"
     episodic = data.get("episodic_count", 0)
     semantic = data.get("semantic_count", 0)
     entities = data.get("entities_staged", 0)
