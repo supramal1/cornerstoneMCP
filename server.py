@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +41,77 @@ DEFAULT_NAMESPACE = os.environ.get("CORNERSTONE_NAMESPACE", "default")
 DEFAULT_AGENT_ID = os.environ.get("CORNERSTONE_AGENT_ID", "openclaw")
 
 _SETTINGS_PATH = Path.home() / ".cornerstone" / "settings.json"
+
+
+# ---------------------------------------------------------------------------
+# Session buffer — fire-and-forget event recording
+# ---------------------------------------------------------------------------
+
+
+class SessionBuffer:
+    """Fire-and-forget session event recording to the backend buffer."""
+
+    def __init__(self, api_url: str, api_key: str):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.current_session_id: str | None = None
+        self._lock = threading.Lock()
+
+    def record(
+        self, tool_name: str, tool_params: dict = None, result_summary: str = None
+    ):
+        with self._lock:
+            session_id = self.current_session_id
+
+        def _send():
+            try:
+                response = httpx.post(
+                    f"{self.api_url}/session-buffer/event",
+                    headers={
+                        "X-API-Key": self.api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "session_id": session_id,
+                        "tool_name": tool_name,
+                        "tool_params": _truncate_params(tool_params),
+                        "tool_result_summary": (result_summary or "")[:300],
+                    },
+                    timeout=5,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    with self._lock:
+                        self.current_session_id = data.get("session_id")
+                else:
+                    logger.warning(
+                        f"Session buffer event failed: {response.status_code}"
+                    )
+            except Exception as e:
+                logger.debug(f"Session buffer event failed (non-critical): {e}")
+
+        threading.Thread(target=_send, daemon=True).start()
+
+    def reset(self):
+        with self._lock:
+            self.current_session_id = None
+
+
+def _truncate_params(params: dict | None) -> dict:
+    if not params:
+        return {}
+    result = {}
+    for k, v in params.items():
+        if k in ("api_key", "key", "password", "secret", "token"):
+            continue
+        if isinstance(v, str) and len(v) > 200:
+            result[k] = v[:200] + "..."
+        else:
+            result[k] = v
+    return result
+
+
+session_buffer = SessionBuffer(api_url=CORNERSTONE_URL, api_key=CORNERSTONE_API_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +519,11 @@ def remember(content: str, type: str = "auto") -> str:
             return f"Error (remember): cannot reach Cornerstone API — {e}"
 
         display_key = metadata.get("display_key", metadata["key"])
+        session_buffer.record(
+            tool_name="remember",
+            tool_params={"content": content, "type": type},
+            result_summary=f"Saved fact: {display_key}",
+        )
         return f"[{ns}] Remembered fact: {display_key} = {metadata['value']}"
 
     else:  # note
@@ -468,6 +545,11 @@ def remember(content: str, type: str = "auto") -> str:
             return f"Error (remember): cannot reach Cornerstone API — {e}"
 
         preview = content[:80] + "..." if len(content) > 80 else content
+        session_buffer.record(
+            tool_name="remember",
+            tool_params={"content": content, "type": type},
+            result_summary=f"Saved note: {preview[:60]}",
+        )
         return f"[{ns}] Remembered note: {preview}"
 
 
@@ -513,6 +595,11 @@ def recall(query: str) -> str:
     stats = data.get("stats", {})
 
     if not context_text or context_text.strip() == "":
+        session_buffer.record(
+            tool_name="recall",
+            tool_params={"query": query},
+            result_summary="No relevant memories found",
+        )
         return f"[{ns}] No relevant memories found for: {query}"
 
     result = f"[{ns}] [Context ID: {context_request_id}]\n\n{context_text}"
@@ -521,6 +608,11 @@ def recall(query: str) -> str:
     if total:
         result += f"\n\n({total} memories used)"
 
+    session_buffer.record(
+        tool_name="recall",
+        tool_params={"query": query},
+        result_summary=f"Found {total} items",
+    )
     return result
 
 
@@ -549,11 +641,18 @@ def forget(query: str, type: str = "auto", confirm: bool = False) -> str:
         return _no_workspace_error()
 
     if type == "fact" or (type == "auto" and _looks_like_fact_key(query)):
-        return _forget_fact(ns, query, confirm)
+        result = _forget_fact(ns, query, confirm)
     elif type == "note":
-        return _forget_note(ns, query, confirm)
+        result = _forget_note(ns, query, confirm)
     else:
-        return _forget_search(ns, query, confirm)
+        result = _forget_search(ns, query, confirm)
+
+    session_buffer.record(
+        tool_name="forget",
+        tool_params={"query": query, "type": type, "confirm": confirm},
+        result_summary=result[:100],
+    )
+    return result
 
 
 def _forget_fact(namespace: str, key: str, confirm: bool) -> str:
@@ -683,6 +782,11 @@ def list_workspaces() -> str:
 
     lines.append(f"\n* = current workspace: {_ws.active_workspace}")
     lines.append(f"Default workspace: {_ws.default_workspace}")
+
+    session_buffer.record(
+        tool_name="list_workspaces",
+        result_summary=f"Listed {len(workspaces)} workspaces",
+    )
     return "\n".join(lines)
 
 
@@ -713,6 +817,11 @@ def get_current_workspace() -> str:
         no_ws_warning = (
             "\nWarning: no workspace selected. Use switch_workspace() to select one."
         )
+
+    session_buffer.record(
+        tool_name="get_current_workspace",
+        result_summary=f"Current: {current or '(none)'}",
+    )
     return (
         f"Current workspace: {current or '(none)'}\nDefault workspace: {default or '(none)'}"
         f"{principal_info}{mismatch}{available_info}{no_ws_warning}"
@@ -767,6 +876,12 @@ def switch_workspace(name: str) -> str:
         old = _ws.active_workspace
         _ws.active_workspace = target
         logger.info("Workspace switched: %s -> %s (frozen, read-only)", old, target)
+        session_buffer.reset()
+        session_buffer.record(
+            tool_name="switch_workspace",
+            tool_params={"name": name},
+            result_summary=f"Switched {old} -> {target} (frozen)",
+        )
         return (
             f"Switched to workspace: {target} ({data.get('display_name', target)})\n"
             f"Warning: this workspace is frozen (read-only access).\n"
@@ -778,6 +893,12 @@ def switch_workspace(name: str) -> str:
     display = data.get("display_name", target)
     access = data.get("access_level", "read")
     logger.info("Workspace switched: %s -> %s", old, target)
+    session_buffer.reset()
+    session_buffer.record(
+        tool_name="switch_workspace",
+        tool_params={"name": name},
+        result_summary=f"Switched {old} -> {target}",
+    )
     return (
         f"Switched to workspace: {target} ({display})\n"
         f"Access level: {access}\n"
@@ -834,6 +955,11 @@ def set_default_workspace(name: str) -> str:
     _ws.default_workspace = target
     if _ws._save_default():
         logger.info("Default workspace set: %s -> %s", old_default, target)
+        session_buffer.record(
+            tool_name="set_default_workspace",
+            tool_params={"name": name},
+            result_summary=f"Default set: {old_default} -> {target}",
+        )
         return (
             f"Default workspace set to: {target} ({data.get('display_name', target)})\n"
             f"Previous default: {old_default}\n"
@@ -903,6 +1029,16 @@ def get_context(query: str, namespace: str = "", detail_level: str = "auto") -> 
         )
     if context_request_id:
         summary_parts.append(f"context_request_id: {context_request_id}")
+
+    session_buffer.record(
+        tool_name="get_context",
+        tool_params={
+            "query": query,
+            "namespace": namespace,
+            "detail_level": detail_level,
+        },
+        result_summary=f"{len(used)} items, {tokens} tokens",
+    )
     return "\n".join(summary_parts)
 
 
@@ -949,6 +1085,16 @@ def add_fact(
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         return f"Error (add_fact): cannot reach Cornerstone API — {e}"
 
+    session_buffer.record(
+        tool_name="add_fact",
+        tool_params={
+            "key": key,
+            "value": value,
+            "category": category,
+            "namespace": namespace,
+        },
+        result_summary=f"Fact saved: {key}",
+    )
     return f"[workspace: {ns}] Fact saved: {data.get('key', key)} (status: {data.get('status', 'ok')})"
 
 
@@ -987,6 +1133,11 @@ def add_note(content: str, tags: list[str] | None = None, namespace: str = "") -
         return f"Error (add_note): cannot reach Cornerstone API — {e}"
 
     note_id = data.get("note_id", "unknown")
+    session_buffer.record(
+        tool_name="add_note",
+        tool_params={"content": content, "tags": tags, "namespace": namespace},
+        result_summary=f"Note saved: {note_id}",
+    )
     return f"[workspace: {ns}] Note saved (id: {note_id}, status: {data.get('status', 'ok')})"
 
 
@@ -1015,12 +1166,22 @@ def list_facts(namespace: str = "", limit: int = 25) -> str:
 
     facts = data.get("facts", [])
     if not facts:
+        session_buffer.record(
+            tool_name="list_facts",
+            tool_params={"namespace": namespace, "limit": limit},
+            result_summary="No facts found",
+        )
         return f"[workspace: {ns}] No facts found."
     lines = [f"[workspace: {ns}]"]
     for f in facts:
         lines.append(
             f"- [{f.get('category', '?')}] {f.get('key', '?')}: {f.get('value', '')}"
         )
+    session_buffer.record(
+        tool_name="list_facts",
+        tool_params={"namespace": namespace, "limit": limit},
+        result_summary=f"Found {len(facts)} facts",
+    )
     return "\n".join(lines)
 
 
@@ -1075,7 +1236,18 @@ def search(query: str, namespace: str = "") -> str:
             )
 
     if len(sections) == 1:
+        session_buffer.record(
+            tool_name="search",
+            tool_params={"query": query, "namespace": namespace},
+            result_summary="No memory found",
+        )
         return f"[workspace: {ns}] No memory found."
+
+    session_buffer.record(
+        tool_name="search",
+        tool_params={"query": query, "namespace": namespace},
+        result_summary=f"Found {len(facts)} facts, {len(notes)} notes, {len(sessions)} sessions",
+    )
     return "\n".join(sections)
 
 
@@ -1102,6 +1274,11 @@ def get_recent_sessions(namespace: str = "", limit: int = 5) -> str:
 
     sessions = data.get("sessions", [])[:limit]
     if not sessions:
+        session_buffer.record(
+            tool_name="get_recent_sessions",
+            tool_params={"namespace": namespace, "limit": limit},
+            result_summary="No recent sessions",
+        )
         return f"[workspace: {ns}] No recent sessions."
     lines = [f"[workspace: {ns}]"]
     for s in sessions:
@@ -1109,6 +1286,12 @@ def get_recent_sessions(namespace: str = "", limit: int = 5) -> str:
         summary = (s.get("summary", "") or "")[:300]
         started = s.get("started_at", "?")
         lines.append(f"### {topic}\n{started}\n{summary}\n")
+
+    session_buffer.record(
+        tool_name="get_recent_sessions",
+        tool_params={"namespace": namespace, "limit": limit},
+        result_summary=f"Found {len(sessions)} sessions",
+    )
     return "\n".join(lines)
 
 
@@ -1149,6 +1332,11 @@ def report_context_feedback(
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         return f"Error (report_context_feedback): cannot reach Cornerstone API — {e}"
 
+    session_buffer.record(
+        tool_name="report_context_feedback",
+        tool_params={"context_request_id": context_request_id, "quality": quality},
+        result_summary=f"Feedback: {quality}",
+    )
     return "Feedback recorded. Thank you."
 
 
@@ -1256,6 +1444,15 @@ def save_conversation(
             "for specific items."
         )
 
+    session_buffer.record(
+        tool_name="save_conversation",
+        tool_params={
+            "topic": topic,
+            "namespace": namespace,
+            "message_count": len(messages),
+        },
+        result_summary=f"Saved session {session_id[:8]}, {episodic} episodic, {semantic} semantic",
+    )
     return "\n".join(parts + summary_note)
 
 
@@ -1281,6 +1478,11 @@ def list_threads(namespace: str = "") -> str:
 
     threads = data.get("threads", [])
     if not threads:
+        session_buffer.record(
+            tool_name="list_threads",
+            tool_params={"namespace": namespace},
+            result_summary="No threads found",
+        )
         return f"[workspace: {ns}] No conversation threads found."
 
     lines = [f"[workspace: {ns}] Found {len(threads)} conversation threads:\n"]
@@ -1289,6 +1491,12 @@ def list_threads(namespace: str = "") -> str:
         count = t.get("session_count", 1)
         last = (t.get("last_session_at") or "")[:10]
         lines.append(f"  {topic} ({count} sessions, last active {last})")
+
+    session_buffer.record(
+        tool_name="list_threads",
+        tool_params={"namespace": namespace},
+        result_summary=f"Found {len(threads)} threads",
+    )
     return "\n".join(lines)
 
 
