@@ -130,6 +130,22 @@ class SessionBuffer:
         with self._lock:
             self.current_session_id = None
 
+    def end(self):
+        """Signal session end to backend so the finalizer picks it up immediately."""
+        with self._lock:
+            session_id = self.current_session_id
+        if not session_id:
+            return
+        try:
+            httpx.post(
+                f"{self.api_url}/session-buffer/end",
+                headers={"X-API-Key": self.api_key, "Content-Type": "application/json"},
+                json={"session_id": session_id},
+                timeout=3,
+            )
+        except Exception:
+            pass  # Best-effort on exit
+
 
 def _truncate_params(params: dict | None) -> dict:
     if not params:
@@ -150,6 +166,10 @@ session_buffer = SessionBuffer(
     api_key=CORNERSTONE_API_KEY,
     client_name=_detect_client(),
 )
+
+import atexit
+
+atexit.register(session_buffer.end)
 
 
 # ---------------------------------------------------------------------------
