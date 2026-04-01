@@ -504,6 +504,49 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
+# ---------------------------------------------------------------------------
+# Friendly error handling for tool validation errors
+# ---------------------------------------------------------------------------
+
+_original_call_tool = mcp.call_tool
+
+
+async def _friendly_call_tool(name, arguments):
+    """Wrap tool calls to catch Pydantic validation errors and return
+    user-friendly messages instead of raw tracebacks."""
+    try:
+        return await _original_call_tool(name, arguments)
+    except Exception as e:
+        err_str = str(e)
+        if "validation error" in err_str.lower():
+            # Extract which fields are missing/wrong
+            missing = []
+            import re as _re
+
+            for m in _re.finditer(r"(\w+)\s+Field required", err_str):
+                missing.append(m.group(1))
+            if missing:
+                return [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Tool '{name}' is missing required parameter(s): "
+                            f"{', '.join(missing)}.\n"
+                            f"Please provide: {', '.join(missing)}."
+                        ),
+                    }
+                ]
+            return [
+                {
+                    "type": "text",
+                    "text": f"Invalid parameters for tool '{name}'. Please check the tool's parameter names and try again.",
+                }
+            ]
+        raise
+
+
+mcp.call_tool = _friendly_call_tool
+
 
 def _headers() -> dict[str, str]:
     h = {"Content-Type": "application/json"}
@@ -906,7 +949,11 @@ def switch_workspace(name: str) -> str:
 
     try:
         with _client() as c:
-            r = c.post("/connection/verify-workspace", json={"name": target})
+            r = c.post(
+                "/connection/verify-workspace",
+                json={"name": target, "namespace": target},
+            )
+            r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
         return _format_http_error(e, "switch_workspace")
