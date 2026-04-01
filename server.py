@@ -1281,8 +1281,10 @@ def list_facts(namespace: str = "", limit: int = 25) -> str:
         return f"[workspace: {ns}] No facts found."
     lines = [f"[workspace: {ns}]"]
     for f in facts:
+        ts = (f.get("updated_at", "") or "")[:10]
         lines.append(
-            f"- [{f.get('category', '?')}] {f.get('key', '?')}: {f.get('value', '')}"
+            f"- [{f.get('category', '?')}] {f.get('key', '?')}: "
+            f"{f.get('value', '')} (updated: {ts})"
         )
     session_buffer.record(
         tool_name="list_facts",
@@ -1322,8 +1324,10 @@ def search(query: str, namespace: str = "") -> str:
     if facts:
         sections.append("## Facts")
         for f in facts:
+            ts = (f.get("updated_at", "") or "")[:10]
             sections.append(
-                f"- [{f.get('category', '?')}] {f.get('key', '?')}: {f.get('value', '')}"
+                f"- [{f.get('category', '?')}] {f.get('key', '?')}: "
+                f"{f.get('value', '')} (updated: {ts})"
             )
 
     notes = data.get("notes", [])
@@ -1331,15 +1335,18 @@ def search(query: str, namespace: str = "") -> str:
         sections.append("\n## Notes")
         for n in notes:
             tags = ", ".join(n.get("tags", []))
+            ts = (n.get("created_at", "") or "")[:10]
             preview = (n.get("content", ""))[:200]
-            sections.append(f"- [{tags}] {preview}")
+            sections.append(f"- [{tags}] ({ts}) {preview}")
 
     sessions = data.get("sessions", [])
     if sessions:
         sections.append("\n## Recent Sessions")
         for s in sessions:
+            ts = (s.get("started_at", "") or "")[:10]
             sections.append(
-                f"- {s.get('topic', 'untitled')}: {(s.get('summary', '') or '')[:150]}"
+                f"- ({ts}) {s.get('topic', 'untitled')}: "
+                f"{(s.get('summary', '') or '')[:150]}"
             )
 
     if len(sections) == 1:
