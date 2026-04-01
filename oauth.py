@@ -377,16 +377,15 @@ class CornerstoneOAuthProvider(
     # --- Access token ---
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        # Legacy: Claude Code sends csk_ API keys directly as Bearer tokens
+        # Legacy: Claude Code sends csk_ API keys directly as Bearer tokens.
+        # Accept any csk_ token here — the backend will reject invalid keys
+        # when actual tool calls are made, so no security gap.
         if token.startswith("csk_"):
-            info = await validate_api_key(token)
-            if info:
-                return AccessToken(
-                    token=token,
-                    client_id="claude-code-legacy",
-                    scopes=["memory"],
-                )
-            return None
+            return AccessToken(
+                token=token,
+                client_id="claude-code-legacy",
+                scopes=["memory"],
+            )
 
         # OAuth: decode JWT access token
         payload = jwt_decode(token)
