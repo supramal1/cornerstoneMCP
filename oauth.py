@@ -180,10 +180,20 @@ async def validate_api_key(api_key: str) -> dict | None:
     Returns principal info dict or None if invalid."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
+            # First try /connection/verify with namespace "default"
+            # (multi-grant principals need explicit namespace)
             r = await client.post(
                 f"{CORNERSTONE_URL}/connection/verify",
                 headers={"X-API-Key": api_key},
+                json={"namespace": "default"},
             )
+            # If 403 (namespace not granted), try without namespace
+            # for single-grant principals
+            if r.status_code == 403:
+                r = await client.post(
+                    f"{CORNERSTONE_URL}/connection/verify",
+                    headers={"X-API-Key": api_key},
+                )
             if r.status_code == 200:
                 data = r.json()
                 return {
