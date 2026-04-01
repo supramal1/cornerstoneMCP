@@ -1,0 +1,580 @@
+"""Memory tools: remember, recall, forget, get_context, add_fact, add_note, search."""
+
+from __future__ import annotations
+
+import re
+
+import httpx
+
+from core import (
+    DEFAULT_AGENT_ID,
+    _classify_memory,
+    _client,
+    _format_http_error,
+    _looks_like_fact_key,
+    _no_workspace_error,
+    _resolve_tool_namespace,
+    _slugify,
+    mcp,
+    session_buffer,
+)
+
+
+# ---------------------------------------------------------------------------
+# remember
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def remember(content: str, type: str = "auto") -> str:
+    """Save something to memory. Cornerstone will remember it for future conversations.
+
+    Use this to store anything important: facts, decisions, preferences, notes,
+    meeting outcomes, project details — anything you might need later.
+
+    Args:
+        content: What to remember. Can be a fact ("Malik's email is malik@co.com"),
+                 a note ("Meeting decided to go with option B"), or any text.
+        type: How to store it. Options:
+              - "auto" (default): Cornerstone decides based on content
+              - "fact": Key-value information (e.g., "Project deadline is March 15")
+              - "note": Freeform observation or note
+
+    Examples:
+        remember("The client's budget is $50,000")
+        remember("Meeting decided to postpone launch to Q2")
+        remember("Malik prefers morning meetings", type="fact")
+    """
+    ns = _resolve_tool_namespace()
+    if not ns:
+        return _no_workspace_error()
+
+    if type == "auto":
+        memory_type, metadata = _classify_memory(content)
+    elif type == "fact":
+        memory_type = "fact"
+        metadata = _extract_fact(content)
+    elif type == "note":
+        memory_type = "note"
+        metadata = {"content": content}
+    else:
+        return f"Unknown type '{type}'. Use 'auto', 'fact', or 'note'."
+
+    buf_id = session_buffer.current_session_id
+
+    if memory_type == "fact":
+        try:
+            payload: dict = {
+                "key": metadata["key"],
+                "value": metadata["value"],
+                "namespace": ns,
+                "category": "general",
+                "confidence": 0.9,
+                "agent_id": DEFAULT_AGENT_ID,
+            }
+            if buf_id:
+                payload["buffer_session_id"] = buf_id
+            with _client() as c:
+                r = c.post("/memory/fact", json=payload)
+                r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            return _format_http_error(e, "remember")
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            return f"Error (remember): cannot reach Cornerstone API — {e}"
+
+        display_key = metadata.get("display_key", metadata["key"])
+        session_buffer.record(
+            tool_name="remember",
+            tool_params={"content": content, "type": type},
+            result_summary=f"Saved fact: {display_key}",
+        )
+        return f"[{ns}] Remembered fact: {display_key} = {metadata['value']}"
+
+    else:  # note
+        try:
+            note_payload: dict = {
+                "content": metadata["content"],
+                "namespace": ns,
+                "tags": ["remember"],
+                "agent_id": DEFAULT_AGENT_ID,
+            }
+            if buf_id:
+                note_payload["buffer_session_id"] = buf_id
+            with _client() as c:
+                r = c.post("/memory/note", json=note_payload)
+                r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            return _format_http_error(e, "remember")
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            return f"Error (remember): cannot reach Cornerstone API — {e}"
+
+        preview = content[:80] + "..." if len(content) > 80 else content
+        session_buffer.record(
+            tool_name="remember",
+            tool_params={"content": content, "type": type},
+            result_summary=f"Saved note: {preview[:60]}",
+        )
+        return f"[{ns}] Remembered note: {preview}"
+
+
+def _extract_fact(content: str) -> dict:
+    """Extract a fact key/value from content when type='fact' is specified."""
+    metadata = _classify_memory(content)
+    if metadata[0] == "fact":
+        return metadata[1]
+    key = _slugify(content[:50])
+    return {"key": key, "value": content, "display_key": content[:50]}
+
+
+# ---------------------------------------------------------------------------
+# recall
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def recall(query: str) -> str:
+    """Search memory for relevant information. Use this whenever you need to
+    remember something from a previous conversation or stored knowledge.
+
+    Args:
+        query: What to look for. Can be a question, a topic, a name — anything.
+
+    Examples:
+        recall("What is the client's budget?")
+        recall("Google pitch")
+        recall("decisions from last week")
+    """
+    ns = _resolve_tool_namespace()
+    if not ns:
+        return _no_workspace_error()
+
+    try:
+        with _client() as c:
+            r = c.post("/context", json={"query": query, "namespace": ns})
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "recall")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (recall): cannot reach Cornerstone API — {e}"
+
+    context_text = data.get("context", "")
+    context_request_id = data.get("context_request_id", "")
+    stats = data.get("stats", {})
+
+    if not context_text or context_text.strip() == "":
+        session_buffer.record(
+            tool_name="recall",
+            tool_params={"query": query},
+            result_summary="No relevant memories found",
+        )
+        return f"[{ns}] No relevant memories found for: {query}"
+
+    result = f"[{ns}] [Context ID: {context_request_id}]\n\n{context_text}"
+
+    total = stats.get("total_items", 0) or len(stats.get("used_memory", []))
+    if total:
+        result += f"\n\n({total} memories used)"
+
+    session_buffer.record(
+        tool_name="recall",
+        tool_params={"query": query},
+        result_summary=f"Found {total} items",
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# forget
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def forget(query: str, type: str = "auto", confirm: bool = False) -> str:
+    """Remove something from memory. Use this to delete incorrect or outdated information.
+
+    By default, shows what would be deleted and asks for confirmation.
+    Set confirm=True to delete immediately.
+
+    Args:
+        query: What to forget. Can be a fact key, a search query, or specific content.
+        type: What to delete. Options:
+              - "auto" (default): Search all memory types
+              - "fact": Delete a specific fact by key
+              - "note": Delete a matching note
+        confirm: Set to True to delete without preview. Default: False (preview only).
+
+    Examples:
+        forget("project_deadline")  # Preview what would be deleted
+        forget("project_deadline", confirm=True)  # Actually delete it
+        forget("outdated meeting notes", type="note", confirm=True)
+    """
+    ns = _resolve_tool_namespace()
+    if not ns:
+        return _no_workspace_error()
+
+    if type == "fact" or (type == "auto" and _looks_like_fact_key(query)):
+        result = _forget_fact(ns, query, confirm)
+    elif type == "note":
+        result = _forget_note(ns, query, confirm)
+    else:
+        result = _forget_search(ns, query, confirm)
+
+    session_buffer.record(
+        tool_name="forget",
+        tool_params={"query": query, "type": type, "confirm": confirm},
+        result_summary=result[:100],
+    )
+    return result
+
+
+def _forget_fact(namespace: str, key: str, confirm: bool) -> str:
+    """Delete a fact by key."""
+    try:
+        with _client() as c:
+            slugified = _slugify(key)
+            r = c.get(
+                "/memory/facts",
+                params={"namespace": namespace, "key": slugified, "limit": 5},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "forget")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (forget): cannot reach Cornerstone API — {e}"
+
+    facts = data.get("facts", [])
+    if not facts:
+        return f"[{namespace}] No fact found matching '{key}'"
+
+    fact = facts[0]
+
+    if not confirm:
+        return (
+            f"[{namespace}] Found fact to delete:\n"
+            f"  Key: {fact['key']}\n"
+            f"  Value: {fact['value']}\n"
+            f'\nCall forget("{key}", confirm=True) to delete it.'
+        )
+
+    try:
+        with _client() as c:
+            r = c.delete(
+                f"/memory/facts/{fact['id']}",
+                params={"namespace": namespace},
+            )
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "forget")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (forget): cannot reach Cornerstone API — {e}"
+
+    return f"[{namespace}] Deleted fact: {fact['key']} = {fact['value']}"
+
+
+def _forget_note(namespace: str, query: str, confirm: bool) -> str:
+    """Handle note deletion — redirects to UI for safety."""
+    if not confirm:
+        return (
+            f"[{namespace}] To delete a specific note, use the Notes page in the UI "
+            f"or specify the exact note content.\n"
+            f"Note deletion by search query is available in the Cornerstone UI."
+        )
+    return (
+        f"[{namespace}] Note deletion by search requires the UI for safety. "
+        f"Use the Notes page to find and delete specific notes."
+    )
+
+
+def _forget_search(namespace: str, query: str, confirm: bool) -> str:
+    """Search across all types and show what could be deleted."""
+    try:
+        with _client() as c:
+            r = c.post("/context", json={"query": query, "namespace": namespace})
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "forget")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (forget): cannot reach Cornerstone API — {e}"
+
+    context = data.get("context", "")
+    if not context:
+        return f"[{namespace}] No memories found matching '{query}'"
+
+    return (
+        f"[{namespace}] Found memories matching '{query}':\n\n"
+        f"{context[:500]}...\n\n"
+        f"To delete specific items:\n"
+        f'- Facts: forget("fact_key", type="fact", confirm=True)\n'
+        f"- Notes: Use the Cornerstone UI Notes page\n"
+        f"- Sessions: Sessions cannot be individually deleted via this tool"
+    )
+
+
+# ---------------------------------------------------------------------------
+# get_context (with temporal filtering — Task 2)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_context(
+    query: str,
+    namespace: str = "",
+    detail_level: str = "auto",
+    from_date: str = "",
+    to_date: str = "",
+) -> str:
+    """Retrieve assembled memory context for a query.
+
+    This is the primary retrieval tool. It returns facts, notes, semantic
+    memories, and episodic memories relevant to the query, assembled into
+    a single context block ready for injection into a conversation.
+
+    Args:
+        query: Natural language query describing what context you need.
+        namespace: Memory namespace (defaults to active workspace).
+        detail_level: How much context to retrieve:
+                     - "auto" (default): Cornerstone decides based on your query
+                     - "minimal": Quick fact lookup
+                     - "standard": Balanced context
+                     - "comprehensive": Everything relevant
+        from_date: Inclusive start date for temporal filtering (YYYY-MM-DD or
+                   relative: today, yesterday, last_7_days, last_7d, this_week,
+                   last_30_days, last_30d, this_month, last_month). When set,
+                   retrieval is time-bounded.
+        to_date: Inclusive end date for temporal filtering (YYYY-MM-DD or
+                 relative shorthand). Auto-defaults to today when from_date is
+                 a relative shorthand and to_date is omitted.
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+    try:
+        body: dict = {
+            "query": query,
+            "namespace": ns,
+            "detail_level": detail_level,
+        }
+        if from_date:
+            body["from_date"] = from_date
+        if to_date:
+            body["to_date"] = to_date
+        with _client() as c:
+            r = c.post("/context", json=body)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "get_context")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (get_context): cannot reach Cornerstone API — {e}"
+
+    context_text = data.get("context", "")
+    context_request_id = data.get("context_request_id")
+    stats = data.get("stats", {})
+    tokens = stats.get("total_tokens", 0)
+    used = stats.get("used_memory", [])
+    summary_parts = [f"[workspace: {ns}]", context_text]
+    if used:
+        summary_parts.append(
+            f"\n--- {len(used)} memory items retrieved, {tokens} tokens ---"
+        )
+    if context_request_id:
+        summary_parts.append(f"context_request_id: {context_request_id}")
+
+    tool_params: dict = {
+        "query": query,
+        "namespace": namespace,
+        "detail_level": detail_level,
+    }
+    if from_date:
+        tool_params["from_date"] = from_date
+    if to_date:
+        tool_params["to_date"] = to_date
+    session_buffer.record(
+        tool_name="get_context",
+        tool_params=tool_params,
+        result_summary=f"{len(used)} items, {tokens} tokens",
+    )
+    return "\n".join(summary_parts)
+
+
+# ---------------------------------------------------------------------------
+# add_fact / add_note
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def add_fact(
+    key: str,
+    value: str,
+    category: str = "general",
+    namespace: str = "",
+    confidence: float = 0.9,
+) -> str:
+    """Store or update a structured fact in long-term memory.
+
+    Facts are key-value pairs that persist across sessions. If a fact with
+    the same key already exists in the namespace, it will be updated.
+
+    Args:
+        key: Unique identifier for this fact (e.g. "user_timezone", "project_deadline").
+        value: The fact content.
+        category: Fact category (e.g. "preference", "project", "personal", "general").
+        namespace: Memory namespace (defaults to active workspace).
+        confidence: Confidence score 0-1.
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+    try:
+        payload: dict = {
+            "key": key,
+            "value": value,
+            "category": category,
+            "namespace": ns,
+            "confidence": confidence,
+            "agent_id": DEFAULT_AGENT_ID,
+        }
+        if session_buffer.current_session_id:
+            payload["buffer_session_id"] = session_buffer.current_session_id
+        with _client() as c:
+            r = c.post("/memory/fact", json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "add_fact")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (add_fact): cannot reach Cornerstone API — {e}"
+
+    session_buffer.record(
+        tool_name="add_fact",
+        tool_params={
+            "key": key,
+            "value": value,
+            "category": category,
+            "namespace": namespace,
+        },
+        result_summary=f"Fact saved: {key}",
+    )
+    return f"[workspace: {ns}] Fact saved: {data.get('key', key)} (status: {data.get('status', 'ok')})"
+
+
+@mcp.tool()
+def add_note(content: str, tags: list[str] | None = None, namespace: str = "") -> str:
+    """Save a freeform note to long-term memory.
+
+    Notes are timestamped text entries with optional tags. Use for session
+    summaries, meeting notes, decisions, action items, or anything that
+    doesn't fit a structured fact.
+
+    Args:
+        content: The note text.
+        tags: Optional list of tags for categorisation.
+        namespace: Memory namespace (defaults to active workspace).
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+    try:
+        payload: dict = {
+            "content": content,
+            "tags": tags or [],
+            "namespace": ns,
+            "agent_id": DEFAULT_AGENT_ID,
+        }
+        if session_buffer.current_session_id:
+            payload["buffer_session_id"] = session_buffer.current_session_id
+        with _client() as c:
+            r = c.post("/memory/note", json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "add_note")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (add_note): cannot reach Cornerstone API — {e}"
+
+    note_id = data.get("note_id") or "unknown"
+    session_buffer.record(
+        tool_name="add_note",
+        tool_params={"content": content, "tags": tags, "namespace": namespace},
+        result_summary=f"Note saved: {note_id}",
+    )
+    return f"[workspace: {ns}] Note saved (id: {note_id}, status: {data.get('status', 'ok')})"
+
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def search(query: str, namespace: str = "") -> str:
+    """Search memory for relevant information.
+
+    Returns facts, notes, episodic and semantic memories matching the query.
+    Lighter than get_context — returns raw memory items without full assembly.
+
+    Args:
+        query: Search query.
+        namespace: Memory namespace (defaults to active workspace).
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+    try:
+        with _client() as c:
+            r = c.get("/memory/recent", params={"namespace": ns, "limit": 25})
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "search")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (search): cannot reach Cornerstone API — {e}"
+
+    sections = [f"[workspace: {ns}]"]
+
+    facts = data.get("facts", [])
+    if facts:
+        sections.append("## Facts")
+        for f in facts:
+            ts = (f.get("updated_at", "") or "")[:10]
+            sections.append(
+                f"- [{f.get('category', '?')}] {f.get('key', '?')}: "
+                f"{f.get('value', '')} (updated: {ts})"
+            )
+
+    notes = data.get("notes", [])
+    if notes:
+        sections.append("\n## Notes")
+        for n in notes:
+            tags = ", ".join(n.get("tags", []))
+            ts = (n.get("created_at", "") or "")[:10]
+            preview = (n.get("content", ""))[:200]
+            sections.append(f"- [{tags}] ({ts}) {preview}")
+
+    sessions = data.get("sessions", [])
+    if sessions:
+        sections.append("\n## Recent Sessions")
+        for s in sessions:
+            ts = (s.get("started_at", "") or "")[:10]
+            sections.append(
+                f"- ({ts}) {s.get('topic', 'untitled')}: "
+                f"{(s.get('summary', '') or '')[:150]}"
+            )
+
+    if len(sections) == 1:
+        session_buffer.record(
+            tool_name="search",
+            tool_params={"query": query, "namespace": namespace},
+            result_summary="No memory found",
+        )
+        return f"[workspace: {ns}] No memory found."
+
+    session_buffer.record(
+        tool_name="search",
+        tool_params={"query": query, "namespace": namespace},
+        result_summary=f"Found {len(facts)} facts, {len(notes)} notes, {len(sessions)} sessions",
+    )
+    return "\n".join(sections)
