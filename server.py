@@ -513,6 +513,7 @@ mcp = FastMCP(
         "Use workspace tools (list_workspaces, get_current_workspace, "
         "switch_workspace, set_default_workspace) to manage multi-workspace sessions."
     ),
+    streamable_http_path="/",
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     auth_server_provider=_oauth_provider,
     auth=AuthSettings(
