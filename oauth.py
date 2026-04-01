@@ -584,6 +584,65 @@ a { color: #60a5fa; }
 <p style="margin-top:1rem;"><a href="javascript:history.back()">Try again</a></p>
 </div></body></html>"""
 
+LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cornerstone — Connected</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0a0a0a;
+            color: #fafafa;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container { text-align: center; max-width: 420px; padding: 2rem; }
+        .check {
+            width: 64px; height: 64px;
+            margin: 0 auto 1.5rem;
+            border-radius: 50%;
+            background: #052e16;
+            border: 2px solid #16a34a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: pop 0.3s ease-out;
+        }
+        .check svg { width: 32px; height: 32px; color: #4ade80; }
+        @keyframes pop {
+            0% { transform: scale(0.5); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        h2 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .name { color: #4ade80; font-weight: 600; }
+        .sub { color: #888; font-size: 0.875rem; margin-top: 0.75rem; }
+        .dots { display: inline-block; }
+        .dots span { animation: blink 1.4s infinite; opacity: 0; }
+        .dots span:nth-child(2) { animation-delay: 0.2s; }
+        .dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="check">
+            <svg fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+        </div>
+        <h2>Connected</h2>
+        <p>Signed in as <span class="name">{principal_name}</span></p>
+        <p class="sub">Returning to Claude Desktop<span class="dots"><span>.</span><span>.</span><span>.</span></span></p>
+    </div>
+    <script>setTimeout(function(){ window.location.href = "{redirect_url}"; }, 2000);</script>
+</body>
+</html>"""
+
 
 # ---------------------------------------------------------------------------
 # Login page route handlers (registered via custom_route)
@@ -669,15 +728,20 @@ def register_login_routes(mcp_server: Any) -> None:
             }
         )
 
-        # Redirect back to the client with the auth code
+        # Build redirect URL with auth code
         redirect_uri = session["redirect_uri"]
         parsed = urlparse(redirect_uri)
         params = {"code": auth_code_jwt}
         if session.get("state"):
             params["state"] = session["state"]
-
-        # Build redirect URL with auth code
         separator = "&" if parsed.query else "?"
         redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
 
-        return RedirectResponse(url=redirect_url, status_code=302)
+        # Show success page before redirecting
+        principal_name = html.escape(principal_info.get("principal_name", ""))
+        return HTMLResponse(
+            LOGIN_SUCCESS_HTML.replace(
+                "{redirect_url}", html.escape(redirect_url)
+            ).replace("{principal_name}", principal_name),
+            status_code=200,
+        )
