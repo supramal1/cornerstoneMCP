@@ -1366,6 +1366,70 @@ def list_facts(
 
 
 @mcp.tool()
+def list_notes(
+    namespace: str = "", limit: int = 25, from_date: str = "", to_date: str = ""
+) -> str:
+    """List recent notes from memory.
+
+    Args:
+        namespace: Memory namespace (defaults to active workspace).
+        limit: Max number of notes to return (1-25).
+        from_date: Filter notes created on or after this date (YYYY-MM-DD, inclusive).
+        to_date: Filter notes created on or before this date (YYYY-MM-DD, inclusive).
+    """
+    ns = _resolve_tool_namespace(namespace)
+    if not ns:
+        return _no_workspace_error()
+    try:
+        params: dict = {"namespace": ns, "limit": min(limit, 25)}
+        if from_date:
+            params["from_date"] = from_date
+        if to_date:
+            params["to_date"] = to_date
+        with _client() as c:
+            r = c.get("/memory/notes", params=params)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "list_notes")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (list_notes): cannot reach Cornerstone API — {e}"
+
+    notes = data.get("notes", [])
+    tool_params: dict = {"namespace": namespace, "limit": limit}
+    if from_date:
+        tool_params["from_date"] = from_date
+    if to_date:
+        tool_params["to_date"] = to_date
+    if not notes:
+        session_buffer.record(
+            tool_name="list_notes",
+            tool_params=tool_params,
+            result_summary="No notes found",
+        )
+        date_note = ""
+        if from_date or to_date:
+            date_note = f" (filtered: {from_date or '...'} to {to_date or '...'})"
+        return f"[workspace: {ns}] No notes found{date_note}."
+    lines = [f"[workspace: {ns}]"]
+    if from_date or to_date:
+        lines[0] += f" (filtered: {from_date or '...'} to {to_date or '...'})"
+    for n in notes:
+        tags = ", ".join(n.get("tags", []) or [])
+        ts = (n.get("created_at", "") or "")[:10]
+        preview = (n.get("content", "") or "")[:200]
+        tag_label = f" [{tags}]" if tags else ""
+        lines.append(f"- ({ts}){tag_label} {preview}")
+
+    session_buffer.record(
+        tool_name="list_notes",
+        tool_params=tool_params,
+        result_summary=f"Found {len(notes)} notes",
+    )
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def search(query: str, namespace: str = "") -> str:
     """Search memory for relevant information.
 
@@ -1437,19 +1501,28 @@ def search(query: str, namespace: str = "") -> str:
 
 
 @mcp.tool()
-def get_recent_sessions(namespace: str = "", limit: int = 5) -> str:
+def get_recent_sessions(
+    namespace: str = "", limit: int = 5, from_date: str = "", to_date: str = ""
+) -> str:
     """Get recent conversation sessions with summaries.
 
     Args:
         namespace: Memory namespace (defaults to active workspace).
-        limit: Max sessions to return.
+        limit: Max sessions to return (1-25).
+        from_date: Filter sessions started on or after this date (YYYY-MM-DD, inclusive).
+        to_date: Filter sessions started on or before this date (YYYY-MM-DD, inclusive).
     """
     ns = _resolve_tool_namespace(namespace)
     if not ns:
         return _no_workspace_error()
     try:
+        params: dict = {"namespace": ns, "limit": min(limit, 25)}
+        if from_date:
+            params["from_date"] = from_date
+        if to_date:
+            params["to_date"] = to_date
         with _client() as c:
-            r = c.get("/memory/load", params={"namespace": ns})
+            r = c.get("/memory/sessions", params=params)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -1457,15 +1530,25 @@ def get_recent_sessions(namespace: str = "", limit: int = 5) -> str:
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         return f"Error (get_recent_sessions): cannot reach Cornerstone API — {e}"
 
-    sessions = data.get("sessions", [])[:limit]
+    sessions = data.get("sessions", [])
+    tool_params: dict = {"namespace": namespace, "limit": limit}
+    if from_date:
+        tool_params["from_date"] = from_date
+    if to_date:
+        tool_params["to_date"] = to_date
     if not sessions:
         session_buffer.record(
             tool_name="get_recent_sessions",
-            tool_params={"namespace": namespace, "limit": limit},
+            tool_params=tool_params,
             result_summary="No recent sessions",
         )
-        return f"[workspace: {ns}] No recent sessions."
+        date_note = ""
+        if from_date or to_date:
+            date_note = f" (filtered: {from_date or '...'} to {to_date or '...'})"
+        return f"[workspace: {ns}] No recent sessions{date_note}."
     lines = [f"[workspace: {ns}]"]
+    if from_date or to_date:
+        lines[0] += f" (filtered: {from_date or '...'} to {to_date or '...'})"
     for s in sessions:
         topic = s.get("topic", "untitled")
         summary = (s.get("summary", "") or "")[:300]
@@ -1474,7 +1557,7 @@ def get_recent_sessions(namespace: str = "", limit: int = 5) -> str:
 
     session_buffer.record(
         tool_name="get_recent_sessions",
-        tool_params={"namespace": namespace, "limit": limit},
+        tool_params=tool_params,
         result_summary=f"Found {len(sessions)} sessions",
     )
     return "\n".join(lines)
@@ -1642,18 +1725,25 @@ def save_conversation(
 
 
 @mcp.tool()
-def list_threads(namespace: str = "") -> str:
+def list_threads(namespace: str = "", from_date: str = "", to_date: str = "") -> str:
     """List conversation threads — groups of related conversations about the same topic.
 
     Args:
         namespace: Memory namespace (defaults to active workspace).
+        from_date: Filter threads last updated on or after this date (YYYY-MM-DD, inclusive).
+        to_date: Filter threads last updated on or before this date (YYYY-MM-DD, inclusive).
     """
     ns = _resolve_tool_namespace(namespace)
     if not ns:
         return _no_workspace_error()
     try:
+        params: dict = {"namespace": ns}
+        if from_date:
+            params["from_date"] = from_date
+        if to_date:
+            params["to_date"] = to_date
         with _client() as c:
-            r = c.get("/memory/threads", params={"namespace": ns})
+            r = c.get("/memory/threads", params=params)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -1662,15 +1752,28 @@ def list_threads(namespace: str = "") -> str:
         return f"Error (list_threads): cannot reach Cornerstone API — {e}"
 
     threads = data.get("threads", [])
+    tool_params: dict = {"namespace": namespace}
+    if from_date:
+        tool_params["from_date"] = from_date
+    if to_date:
+        tool_params["to_date"] = to_date
     if not threads:
         session_buffer.record(
             tool_name="list_threads",
-            tool_params={"namespace": namespace},
+            tool_params=tool_params,
             result_summary="No threads found",
         )
-        return f"[workspace: {ns}] No conversation threads found."
+        date_note = ""
+        if from_date or to_date:
+            date_note = f" (filtered: {from_date or '...'} to {to_date or '...'})"
+        return f"[workspace: {ns}] No conversation threads found{date_note}."
 
     lines = [f"[workspace: {ns}] Found {len(threads)} conversation threads:\n"]
+    if from_date or to_date:
+        lines[0] = (
+            f"[workspace: {ns}] Found {len(threads)} threads "
+            f"(filtered: {from_date or '...'} to {to_date or '...'}):\n"
+        )
     for t in threads:
         topic = t.get("topic") or "Untitled"
         count = t.get("session_count", 1)
@@ -1679,7 +1782,7 @@ def list_threads(namespace: str = "") -> str:
 
     session_buffer.record(
         tool_name="list_threads",
-        tool_params={"namespace": namespace},
+        tool_params=tool_params,
         result_summary=f"Found {len(threads)} threads",
     )
     return "\n".join(lines)
