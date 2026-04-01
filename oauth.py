@@ -738,10 +738,13 @@ def register_login_routes(mcp_server: Any) -> None:
         redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
 
         # Show success page before redirecting
+        # Use json.dumps for the JS string context (escapes quotes/backslashes)
+        # and html.escape only for the HTML text context
+        js_safe_url = json.dumps(redirect_url)[1:-1]  # strip outer quotes
         principal_name = html.escape(principal_info.get("principal_name", ""))
         return HTMLResponse(
-            LOGIN_SUCCESS_HTML.replace(
-                "{redirect_url}", html.escape(redirect_url)
-            ).replace("{principal_name}", principal_name),
+            LOGIN_SUCCESS_HTML.replace("{redirect_url}", js_safe_url).replace(
+                "{principal_name}", principal_name
+            ),
             status_code=200,
         )
