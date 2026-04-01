@@ -582,18 +582,21 @@ def _headers() -> dict[str, str]:
 
         access_token = get_access_token()
         if access_token:
+            token_type = "csk" if access_token.token.startswith("csk_") else "jwt"
             api_key = get_api_key_from_token(access_token.token)
             if api_key:
                 logger.info(
-                    "Using per-request API key (from %s token)",
-                    "csk" if api_key.startswith("csk_") else "jwt",
+                    "Auth: bearer=%s, extracted_key=%s...%s",
+                    token_type,
+                    api_key[:8],
+                    api_key[-4:],
                 )
                 h["X-API-Key"] = api_key
                 return h
             else:
                 logger.warning(
-                    "get_api_key_from_token returned None for token type: %s",
-                    "csk" if access_token.token.startswith("csk_") else "jwt",
+                    "get_api_key_from_token returned None for %s token",
+                    token_type,
                 )
         else:
             logger.info("No access_token in request context — falling back to env var")
