@@ -11,3 +11,7 @@ settings.json
 
 # OS
 .DS_Store
+
+# Claude Code / Next.js
+.claude/
+.next/
