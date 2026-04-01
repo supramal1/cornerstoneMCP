@@ -197,11 +197,9 @@ async def validate_api_key(api_key: str) -> dict | None:
             if r.status_code == 200:
                 data = r.json()
                 return {
-                    "principal_id": data.get("principal", {}).get("id", ""),
-                    "principal_name": data.get("principal", {}).get("name", "unknown"),
-                    "workspaces": [
-                        g.get("namespace", "") for g in data.get("workspaces", [])
-                    ],
+                    "principal_id": data.get("principal_id", ""),
+                    "principal_name": data.get("principal", "unknown"),
+                    "workspaces": data.get("allowed_workspaces", []),
                 }
             return None
     except Exception as e:

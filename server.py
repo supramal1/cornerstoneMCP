@@ -1288,21 +1288,28 @@ def add_note(content: str, tags: list[str] | None = None, namespace: str = "") -
 
 
 @mcp.tool()
-def list_facts(namespace: str = "", limit: int = 25) -> str:
+def list_facts(
+    namespace: str = "", limit: int = 25, from_date: str = "", to_date: str = ""
+) -> str:
     """List recent facts from memory.
 
     Args:
         namespace: Memory namespace (defaults to active workspace).
         limit: Max number of facts to return (1-25).
+        from_date: Filter facts updated on or after this date (YYYY-MM-DD, inclusive).
+        to_date: Filter facts updated on or before this date (YYYY-MM-DD, inclusive).
     """
     ns = _resolve_tool_namespace(namespace)
     if not ns:
         return _no_workspace_error()
     try:
+        params = {"namespace": ns, "limit": min(limit, 25)}
+        if from_date:
+            params["from_date"] = from_date
+        if to_date:
+            params["to_date"] = to_date
         with _client() as c:
-            r = c.get(
-                "/memory/recent", params={"namespace": ns, "limit": min(limit, 25)}
-            )
+            r = c.get("/memory/facts", params=params)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -1311,14 +1318,24 @@ def list_facts(namespace: str = "", limit: int = 25) -> str:
         return f"Error (list_facts): cannot reach Cornerstone API — {e}"
 
     facts = data.get("facts", [])
+    tool_params = {"namespace": namespace, "limit": limit}
+    if from_date:
+        tool_params["from_date"] = from_date
+    if to_date:
+        tool_params["to_date"] = to_date
     if not facts:
         session_buffer.record(
             tool_name="list_facts",
-            tool_params={"namespace": namespace, "limit": limit},
+            tool_params=tool_params,
             result_summary="No facts found",
         )
-        return f"[workspace: {ns}] No facts found."
+        date_note = ""
+        if from_date or to_date:
+            date_note = f" (filtered: {from_date or '...'} to {to_date or '...'})"
+        return f"[workspace: {ns}] No facts found{date_note}."
     lines = [f"[workspace: {ns}]"]
+    if from_date or to_date:
+        lines[0] += f" (filtered: {from_date or '...'} to {to_date or '...'})"
     for f in facts:
         ts = (f.get("updated_at", "") or "")[:10]
         lines.append(
@@ -1327,7 +1344,7 @@ def list_facts(namespace: str = "", limit: int = 25) -> str:
         )
     session_buffer.record(
         tool_name="list_facts",
-        tool_params={"namespace": namespace, "limit": limit},
+        tool_params=tool_params,
         result_summary=f"Found {len(facts)} facts",
     )
     return "\n".join(lines)
