@@ -584,12 +584,24 @@ def _headers() -> dict[str, str]:
         if access_token:
             api_key = get_api_key_from_token(access_token.token)
             if api_key:
+                logger.info(
+                    "Using per-request API key (from %s token)",
+                    "csk" if api_key.startswith("csk_") else "jwt",
+                )
                 h["X-API-Key"] = api_key
                 return h
-    except Exception:
-        pass
+            else:
+                logger.warning(
+                    "get_api_key_from_token returned None for token type: %s",
+                    "csk" if access_token.token.startswith("csk_") else "jwt",
+                )
+        else:
+            logger.info("No access_token in request context — falling back to env var")
+    except Exception as e:
+        logger.warning("get_access_token() failed: %s", e)
     # Fallback to env var (stdio mode or legacy Bearer tokens)
     if CORNERSTONE_API_KEY:
+        logger.info("Using CORNERSTONE_API_KEY env var fallback")
         h["X-API-Key"] = CORNERSTONE_API_KEY
     return h
 
