@@ -25,6 +25,14 @@ from typing import Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import AnyHttpUrl
+
+from oauth import (
+    MCP_PUBLIC_URL,
+    CornerstoneOAuthProvider,
+    get_api_key_from_token,
+    register_login_routes,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cornerstone.mcp")
@@ -492,6 +500,10 @@ def _looks_like_fact_key(query: str) -> bool:
 # MCP server setup
 # ---------------------------------------------------------------------------
 
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
+
+_oauth_provider = CornerstoneOAuthProvider()
+
 mcp = FastMCP(
     "cornerstone",
     instructions=(
@@ -502,7 +514,21 @@ mcp = FastMCP(
         "switch_workspace, set_default_workspace) to manage multi-workspace sessions."
     ),
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    auth_server_provider=_oauth_provider,
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl(MCP_PUBLIC_URL),
+        resource_server_url=AnyHttpUrl(MCP_PUBLIC_URL),
+        required_scopes=["memory"],
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=["memory"],
+            default_scopes=["memory"],
+        ),
+    ),
 )
+
+# Register the OAuth login page routes
+register_login_routes(mcp)
 
 # ---------------------------------------------------------------------------
 # Friendly error handling for tool validation errors
@@ -550,6 +576,19 @@ mcp.call_tool = _friendly_call_tool
 
 def _headers() -> dict[str, str]:
     h = {"Content-Type": "application/json"}
+    # Try per-request OAuth token first (set by auth middleware in HTTP mode)
+    try:
+        from mcp.server.auth.middleware.auth_context import get_access_token
+
+        access_token = get_access_token()
+        if access_token:
+            api_key = get_api_key_from_token(access_token.token)
+            if api_key:
+                h["X-API-Key"] = api_key
+                return h
+    except Exception:
+        pass
+    # Fallback to env var (stdio mode or legacy Bearer tokens)
     if CORNERSTONE_API_KEY:
         h["X-API-Key"] = CORNERSTONE_API_KEY
     return h
