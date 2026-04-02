@@ -61,8 +61,8 @@ MCP_PUBLIC_URL = os.environ.get(
 CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "http://127.0.0.1:8000")
 
 # Token lifetimes
-ACCESS_TOKEN_TTL = 24 * 3600  # 24 hours
-REFRESH_TOKEN_TTL = 30 * 24 * 3600  # 30 days
+ACCESS_TOKEN_TTL = 365 * 24 * 3600  # 1 year
+REFRESH_TOKEN_TTL = 365 * 24 * 3600  # 1 year
 AUTH_CODE_TTL = 120  # 2 minutes
 
 
