@@ -61,8 +61,10 @@ MCP_PUBLIC_URL = os.environ.get(
 CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "http://127.0.0.1:8000")
 
 # Token lifetimes
-ACCESS_TOKEN_TTL = 365 * 24 * 3600  # 1 year
-REFRESH_TOKEN_TTL = 365 * 24 * 3600  # 1 year
+# Access and refresh tokens never expire (personal MCP server).
+# jwt_decode() skips expiry check when "exp" is absent.
+ACCESS_TOKEN_TTL = None
+REFRESH_TOKEN_TTL = None
 AUTH_CODE_TTL = 120  # 2 minutes
 
 
@@ -286,32 +288,34 @@ class CornerstoneOAuthProvider(
         authorization_code: CornerstoneAuthCode,
     ) -> OAuthToken:
         now = int(time.time())
-        access_payload = {
+        access_payload: dict[str, Any] = {
             "type": "access",
             "sub": authorization_code.principal_id,
             "name": authorization_code.principal_name,
             "client_id": client.client_id,
             "scopes": authorization_code.scopes,
             "akob": authorization_code.api_key_obf,
-            "exp": now + ACCESS_TOKEN_TTL,
             "iat": now,
             "jti": secrets.token_urlsafe(16),
         }
-        refresh_payload = {
+        if ACCESS_TOKEN_TTL is not None:
+            access_payload["exp"] = now + ACCESS_TOKEN_TTL
+        refresh_payload: dict[str, Any] = {
             "type": "refresh",
             "sub": authorization_code.principal_id,
             "name": authorization_code.principal_name,
             "client_id": client.client_id,
             "scopes": authorization_code.scopes,
             "akob": authorization_code.api_key_obf,
-            "exp": now + REFRESH_TOKEN_TTL,
             "iat": now,
             "jti": secrets.token_urlsafe(16),
         }
+        if REFRESH_TOKEN_TTL is not None:
+            refresh_payload["exp"] = now + REFRESH_TOKEN_TTL
         return OAuthToken(
             access_token=jwt_encode(access_payload),
             token_type="Bearer",
-            expires_in=ACCESS_TOKEN_TTL,
+            expires_in=ACCESS_TOKEN_TTL or 0,
             scope=" ".join(authorization_code.scopes),
             refresh_token=jwt_encode(refresh_payload),
         )
@@ -344,32 +348,34 @@ class CornerstoneOAuthProvider(
     ) -> OAuthToken:
         now = int(time.time())
         use_scopes = scopes if scopes else refresh_token.scopes
-        access_payload = {
+        access_payload: dict[str, Any] = {
             "type": "access",
             "sub": refresh_token.principal_id,
             "name": refresh_token.principal_name,
             "client_id": client.client_id,
             "scopes": use_scopes,
             "akob": refresh_token.api_key_obf,
-            "exp": now + ACCESS_TOKEN_TTL,
             "iat": now,
             "jti": secrets.token_urlsafe(16),
         }
-        new_refresh_payload = {
+        if ACCESS_TOKEN_TTL is not None:
+            access_payload["exp"] = now + ACCESS_TOKEN_TTL
+        new_refresh_payload: dict[str, Any] = {
             "type": "refresh",
             "sub": refresh_token.principal_id,
             "name": refresh_token.principal_name,
             "client_id": client.client_id,
             "scopes": use_scopes,
             "akob": refresh_token.api_key_obf,
-            "exp": now + REFRESH_TOKEN_TTL,
             "iat": now,
             "jti": secrets.token_urlsafe(16),
         }
+        if REFRESH_TOKEN_TTL is not None:
+            new_refresh_payload["exp"] = now + REFRESH_TOKEN_TTL
         return OAuthToken(
             access_token=jwt_encode(access_payload),
             token_type="Bearer",
-            expires_in=ACCESS_TOKEN_TTL,
+            expires_in=ACCESS_TOKEN_TTL or 0,
             scope=" ".join(use_scopes),
             refresh_token=jwt_encode(new_refresh_payload),
         )
@@ -402,7 +408,7 @@ class CornerstoneOAuthProvider(
 
     async def revoke_token(self, token: AccessToken | CornerstoneStoredToken) -> None:
         # JWTs can't be revoked without a blocklist. For now, no-op.
-        # Tokens are short-lived (24h) which limits exposure.
+        # Personal server — tokens don't expire; rotate JWT_SECRET to invalidate all.
         logger.info("Token revocation requested (no-op for JWTs)")
 
 
