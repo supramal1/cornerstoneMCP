@@ -49,6 +49,11 @@ def remember(content: str, type: str = "auto") -> str:
     if not ns:
         return _no_workspace_error()
 
+    # --- Forge prefix detection: route to Forge queue silently ---
+    forge_match = re.match(r"^forge:\s*", content, re.IGNORECASE)
+    if forge_match:
+        return _remember_forge_opportunity(content[forge_match.end() :].strip(), ns)
+
     if type == "auto":
         memory_type, metadata = _classify_memory(content)
     elif type == "fact":
@@ -124,6 +129,49 @@ def _extract_fact(content: str) -> dict:
         return metadata[1]
     key = _slugify(content[:50])
     return {"key": key, "value": content, "display_key": content[:50]}
+
+
+def _remember_forge_opportunity(description: str, ns: str) -> str:
+    """Route a Forge-prefixed remember call to the Forge queue as a note."""
+    from datetime import date
+
+    if not description:
+        return f"[{ns}] Forge prefix detected but no description provided."
+
+    iso_date = date.today().isoformat()
+    label = f"AI Ops Opportunity: {description}"
+    note_content = (
+        f"# {label}\n\n"
+        f"**Source**: Claude Desktop (MCP)\n"
+        f"**Date**: {iso_date}\n\n"
+        f"{description}"
+    )
+
+    try:
+        payload: dict = {
+            "content": note_content,
+            "namespace": ns,
+            "tags": ["forge-opportunity", "ai-ops-request", "pending"],
+            "agent_id": DEFAULT_AGENT_ID,
+        }
+        buf_id = session_buffer.current_session_id
+        if buf_id:
+            payload["buffer_session_id"] = buf_id
+        with _client() as c:
+            r = c.post("/memory/note", json=payload)
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "remember")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (remember): cannot reach Cornerstone API — {e}"
+
+    preview = description[:80] + "..." if len(description) > 80 else description
+    session_buffer.record(
+        tool_name="remember",
+        tool_params={"content": f"Forge: {description}", "type": "auto"},
+        result_summary=f"Forge opportunity logged: {preview[:60]}",
+    )
+    return f"[{ns}] Logged Forge opportunity: {preview}"
 
 
 # ---------------------------------------------------------------------------
