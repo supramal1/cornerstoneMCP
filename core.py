@@ -548,11 +548,13 @@ def _headers() -> dict[str, str]:
             token_type = "csk" if access_token.token.startswith("csk_") else "jwt"
             api_key = get_api_key_from_token(access_token.token)
             if api_key:
+                import hashlib
+
+                key_fingerprint = hashlib.sha256(api_key.encode()).hexdigest()[:8]
                 logger.debug(
-                    "Auth: bearer=%s, extracted_key=%s...%s",
+                    "Auth: bearer=%s, key_fingerprint=%s",
                     token_type,
-                    api_key[:8],
-                    api_key[-4:],
+                    key_fingerprint,
                 )
                 h["X-API-Key"] = api_key
                 return h

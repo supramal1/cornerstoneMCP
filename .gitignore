@@ -1,5 +1,12 @@
 # Environment
 .env
+.env.*
+!.env.example
+
+# Secrets / credentials
+*.pem
+*.key
+*_secret.json
 
 # Python
 .venv/
