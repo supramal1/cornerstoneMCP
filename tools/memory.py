@@ -332,8 +332,17 @@ def get_context(
     memories, and episodic memories relevant to the query, assembled into
     a single context block ready for injection into a conversation.
 
+    Temporal queries are auto-detected from natural language. Expressions
+    like "last week", "yesterday", "in March 2026", "3 days ago", or
+    "since 2026-03-01" are parsed automatically — the resolved date range
+    filters retrieval and the temporal expression is stripped from the
+    semantic search query. Explicit from_date/to_date params override
+    any auto-detected intent.
+
     Args:
         query: Natural language query describing what context you need.
+               Temporal expressions are auto-detected (e.g. "last week",
+               "in March 2026", "3 days ago").
         namespace: Memory namespace (defaults to active workspace).
         detail_level: How much context to retrieve:
                      - "auto" (default): Cornerstone decides based on your query
@@ -343,7 +352,7 @@ def get_context(
         from_date: Inclusive start date for temporal filtering (YYYY-MM-DD or
                    relative: today, yesterday, last_7_days, last_7d, this_week,
                    last_30_days, last_30d, this_month, last_month). When set,
-                   retrieval is time-bounded.
+                   retrieval is time-bounded. Overrides auto-detected intent.
         to_date: Inclusive end date for temporal filtering (YYYY-MM-DD or
                  relative shorthand). Auto-defaults to today when from_date is
                  a relative shorthand and to_date is omitted.
