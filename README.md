@@ -1,6 +1,6 @@
 # Cornerstone MCP Server
 
-Connect Claude Code or any MCP tool to your Cornerstone memory.
+MCP server providing 17+ tools for Claude Code, Claude Desktop, and any MCP-compatible client to interact with Cornerstone memory.
 
 ## Quick Start
 
@@ -19,6 +19,15 @@ Connect Claude Code or any MCP tool to your Cornerstone memory.
    - **"Remember that the project deadline is March 15"** → saves to memory
    - **"What do we know about the Google pitch?"** → recalls from memory
    - **"Forget the old project deadline"** → removes from memory
+
+## Deploy
+Deployed to Google Cloud Run (europe-west2). See cornerstone repo for deploy scripts.
+
+## Auth
+OAuth 2.1 with JWT principal-based access control. Falls back to legacy API key auth.
+
+## Configuration
+Required env vars: CORNERSTONE_URL, CORNERSTONE_API_KEY, OAUTH_JWT_SECRET, MCP_PUBLIC_URL
 
 ## Tools
 
