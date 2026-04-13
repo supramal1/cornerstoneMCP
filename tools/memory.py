@@ -582,7 +582,10 @@ def search(query: str, namespace: str = "") -> str:
         return _no_workspace_error()
     try:
         with _client() as c:
-            r = c.get("/memory/recent", params={"namespace": ns, "limit": 25})
+            r = c.post(
+                "/context",
+                json={"query": query, "namespace": ns, "detail_level": "standard"},
+            )
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -590,48 +593,48 @@ def search(query: str, namespace: str = "") -> str:
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         return f"Error (search): cannot reach Cornerstone API — {e}"
 
-    sections = [f"[workspace: {ns}]"]
+    stats = data.get("stats", {})
+    used = stats.get("used_memory", [])
 
-    facts = data.get("facts", [])
-    if facts:
-        sections.append("## Facts")
-        for f in facts:
-            ts = (f.get("updated_at", "") or "")[:10]
-            sections.append(
-                f"- [{f.get('category', '?')}] {f.get('key', '?')}: "
-                f"{f.get('value', '')} (updated: {ts})"
-            )
-
-    notes = data.get("notes", [])
-    if notes:
-        sections.append("\n## Notes")
-        for n in notes:
-            tags = ", ".join(n.get("tags", []))
-            ts = (n.get("created_at", "") or "")[:10]
-            preview = (n.get("content", ""))[:200]
-            sections.append(f"- [{tags}] ({ts}) {preview}")
-
-    sessions = data.get("sessions", [])
-    if sessions:
-        sections.append("\n## Recent Sessions")
-        for s in sessions:
-            ts = (s.get("started_at", "") or "")[:10]
-            sections.append(
-                f"- ({ts}) {s.get('topic', 'untitled')}: "
-                f"{(s.get('summary', '') or '')[:150]}"
-            )
-
-    if len(sections) == 1:
+    if not used:
         session_buffer.record(
             tool_name="search",
             tool_params={"query": query, "namespace": namespace},
             result_summary="No memory found",
         )
-        return f"[workspace: {ns}] No memory found."
+        return f"[workspace: {ns}] No memory found matching: {query}"
+
+    # Group items by source_type
+    grouped: dict[str, list] = {}
+    for item in used:
+        source_type = item.get("source_type", "unknown")
+        grouped.setdefault(source_type, []).append(item)
+
+    sections = [f"[workspace: {ns}]"]
+    type_labels = {
+        "fact": "Facts",
+        "note": "Notes",
+        "episodic": "Episodic Memories",
+        "semantic": "Semantic Memories",
+        "graph": "Knowledge Graph",
+    }
+
+    for source_type, items in grouped.items():
+        label = type_labels.get(source_type, source_type.title())
+        sections.append(f"\n## {label}")
+        for item in items:
+            preview = item.get("preview", "")[:300]
+            score = item.get("score") or item.get("match_score")
+            ts = (item.get("timestamp", "") or "")[:10]
+            parts = [f"- ({ts})" if ts else "-"]
+            parts.append(preview)
+            if score is not None:
+                parts.append(f"[score: {score:.2f}]")
+            sections.append(" ".join(parts))
 
     session_buffer.record(
         tool_name="search",
         tool_params={"query": query, "namespace": namespace},
-        result_summary=f"Found {len(facts)} facts, {len(notes)} notes, {len(sessions)} sessions",
+        result_summary=f"Found {len(used)} items across {len(grouped)} types",
     )
     return "\n".join(sections)
