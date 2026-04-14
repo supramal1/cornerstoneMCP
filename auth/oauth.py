@@ -37,6 +37,8 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
+from auth import google
+
 logger = logging.getLogger("cornerstone.oauth")
 
 # ---------------------------------------------------------------------------
@@ -59,6 +61,11 @@ MCP_PUBLIC_URL = os.environ.get(
 
 # Cornerstone backend URL (for validating API keys)
 CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "http://127.0.0.1:8000")
+
+# Cornerstone backend superuser key (used for resolve-email bridge call only).
+# TODO: Replace with a scoped service token in a follow-up sprint.
+# See docs/superpowers/plans/2026-04-14-google-oauth.md §"Design Decisions".
+MEMORY_API_KEY = os.environ.get("MEMORY_API_KEY", "")
 
 # Token lifetimes
 # Access and refresh tokens never expire (personal MCP server).
@@ -747,6 +754,164 @@ def register_login_routes(mcp_server: Any) -> None:
         # and html.escape only for the HTML text context
         js_safe_url = json.dumps(redirect_url)[1:-1]  # strip outer quotes
         principal_name = html.escape(principal_info.get("principal_name", ""))
+        return HTMLResponse(
+            LOGIN_SUCCESS_HTML.replace("{redirect_url}", js_safe_url).replace(
+                "{principal_name}", principal_name
+            ),
+            status_code=200,
+        )
+
+    # -----------------------------------------------------------------------
+    # Google OAuth flow
+    # -----------------------------------------------------------------------
+
+    async def _resolve_email_via_backend(email: str, name: str) -> dict | None:
+        # Read at call time so tests and rotated secrets work without re-import.
+        memory_api_key = MEMORY_API_KEY or os.environ.get("MEMORY_API_KEY", "")
+        cornerstone_url = CORNERSTONE_URL or os.environ.get(
+            "CORNERSTONE_URL", "http://127.0.0.1:8000"
+        )
+        if not memory_api_key:
+            logger.error("MEMORY_API_KEY not set — cannot call resolve-email")
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    f"{cornerstone_url}/admin/auth/resolve-email",
+                    headers={"X-API-Key": memory_api_key},
+                    json={"email": email, "name": name},
+                )
+                if r.status_code != 200:
+                    logger.error(
+                        "resolve-email failed: %s %s", r.status_code, r.text[:200]
+                    )
+                    return None
+                return r.json()
+        except Exception as e:
+            logger.error("resolve-email exception: %s", e)
+            return None
+
+    @mcp_server.custom_route("/oauth/google/start", methods=["GET"])
+    async def google_start(request: Request) -> Response:
+        if not google.is_configured():
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Google sign-in is not configured on this server.",
+                ),
+                status_code=503,
+            )
+
+        session_jwt = request.query_params.get("session", "")
+        session = jwt_decode(session_jwt) if session_jwt else None
+        if not session or session.get("type") != "auth_session":
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Invalid or expired session. Please try connecting again.",
+                ),
+                status_code=400,
+            )
+
+        state_jwt = jwt_encode(
+            {
+                "type": "google_state",
+                "session_sid": session["sid"],
+                "session": session,
+                "exp": time.time() + 600,
+            }
+        )
+        return RedirectResponse(
+            google.build_authorization_url(state_jwt), status_code=302
+        )
+
+    @mcp_server.custom_route("/oauth/callback", methods=["GET"])
+    async def google_callback(request: Request) -> Response:
+        state_jwt = request.query_params.get("state", "")
+        code = request.query_params.get("code", "")
+
+        state_payload = jwt_decode(state_jwt) if state_jwt else None
+        if not state_payload or state_payload.get("type") != "google_state":
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Invalid or expired sign-in state. Please try again.",
+                ),
+                status_code=400,
+            )
+
+        session = state_payload.get("session") or {}
+        if not session or session.get("type") != "auth_session":
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Session lost during sign-in. Please restart the connection.",
+                ),
+                status_code=400,
+            )
+
+        google_redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "")
+        try:
+            tokens = await google.exchange_code_for_tokens(code, google_redirect_uri)
+        except Exception as e:
+            logger.warning("Google token exchange failed: %s", e)
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Google sign-in failed. Please try again.",
+                ),
+                status_code=401,
+            )
+
+        id_token = tokens.get("id_token") if isinstance(tokens, dict) else None
+        verified = await google.verify_id_token(id_token) if id_token else None
+        if not verified:
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "We couldn't verify your Google account. Make sure you're using your Charlie Oscar account.",
+                ),
+                status_code=401,
+            )
+
+        email = verified["email"]
+        name = verified.get("name") or email.split("@")[0]
+        resolved = await _resolve_email_via_backend(email, name)
+        if not resolved:
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Could not provision your Cornerstone account. Contact Mal.",
+                ),
+                status_code=500,
+            )
+
+        api_key = resolved.get("api_key", "")
+        auth_code_jwt = jwt_encode(
+            {
+                "type": "auth_code",
+                "client_id": session["client_id"],
+                "redirect_uri": session["redirect_uri"],
+                "redirect_uri_explicit": session.get("redirect_uri_explicit", True),
+                "code_challenge": session["code_challenge"],
+                "scopes": session.get("scopes", ["memory"]),
+                "principal_id": resolved["principal_id"],
+                "principal_name": resolved["principal_name"],
+                "api_key_obf": _obfuscate_key(api_key),
+                "exp": time.time() + AUTH_CODE_TTL,
+            }
+        )
+
+        redirect_uri = session["redirect_uri"]
+        parsed = urlparse(redirect_uri)
+        params = {"code": auth_code_jwt}
+        if session.get("state"):
+            params["state"] = session["state"]
+        separator = "&" if parsed.query else "?"
+        redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
+
+        js_safe_url = json.dumps(redirect_url)[1:-1]
+        principal_name = html.escape(resolved.get("principal_name", ""))
         return HTMLResponse(
             LOGIN_SUCCESS_HTML.replace("{redirect_url}", js_safe_url).replace(
                 "{principal_name}", principal_name
