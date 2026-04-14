@@ -664,6 +664,52 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
 def register_login_routes(mcp_server: Any) -> None:
     """Register the OAuth login page routes on the FastMCP server."""
 
+    def _issue_auth_code_and_render(
+        session: dict,
+        principal_id: str,
+        principal_name: str,
+        api_key: str,
+    ) -> Response:
+        """Mint an auth_code JWT for an authenticated session and return the
+        success HTML response that redirects the client back to its
+        redirect_uri with the code (and state, if present).
+
+        Mirrors the field-for-field shape expected by CornerstoneOAuthProvider's
+        exchange_authorization_code — keep this function in sync with that
+        handler when the auth_code payload changes.
+        """
+        auth_code_jwt = jwt_encode(
+            {
+                "type": "auth_code",
+                "client_id": session["client_id"],
+                "redirect_uri": session["redirect_uri"],
+                "redirect_uri_explicit": session.get("redirect_uri_explicit", True),
+                "code_challenge": session["code_challenge"],
+                "scopes": session.get("scopes", ["memory"]),
+                "principal_id": principal_id,
+                "principal_name": principal_name,
+                "api_key_obf": _obfuscate_key(api_key),
+                "exp": time.time() + AUTH_CODE_TTL,
+            }
+        )
+
+        redirect_uri = session["redirect_uri"]
+        parsed = urlparse(redirect_uri)
+        params = {"code": auth_code_jwt}
+        if session.get("state"):
+            params["state"] = session["state"]
+        separator = "&" if parsed.query else "?"
+        redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
+
+        js_safe_url = json.dumps(redirect_url)[1:-1]
+        principal_name_safe = html.escape(principal_name or "")
+        return HTMLResponse(
+            LOGIN_SUCCESS_HTML.replace("{redirect_url}", js_safe_url).replace(
+                "{principal_name}", principal_name_safe
+            ),
+            status_code=200,
+        )
+
     @mcp_server.custom_route("/oauth/login", methods=["GET"])
     async def login_page(request: Request) -> Response:
         session_jwt = request.query_params.get("session", "")
@@ -724,41 +770,11 @@ def register_login_routes(mcp_server: Any) -> None:
                 status_code=401,
             )
 
-        # Create authorization code as JWT
-        auth_code_jwt = jwt_encode(
-            {
-                "type": "auth_code",
-                "client_id": session["client_id"],
-                "redirect_uri": session["redirect_uri"],
-                "redirect_uri_explicit": session.get("redirect_uri_explicit", True),
-                "code_challenge": session["code_challenge"],
-                "scopes": session.get("scopes", ["memory"]),
-                "principal_id": principal_info["principal_id"],
-                "principal_name": principal_info["principal_name"],
-                "api_key_obf": _obfuscate_key(api_key),
-                "exp": time.time() + AUTH_CODE_TTL,
-            }
-        )
-
-        # Build redirect URL with auth code
-        redirect_uri = session["redirect_uri"]
-        parsed = urlparse(redirect_uri)
-        params = {"code": auth_code_jwt}
-        if session.get("state"):
-            params["state"] = session["state"]
-        separator = "&" if parsed.query else "?"
-        redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
-
-        # Show success page before redirecting
-        # Use json.dumps for the JS string context (escapes quotes/backslashes)
-        # and html.escape only for the HTML text context
-        js_safe_url = json.dumps(redirect_url)[1:-1]  # strip outer quotes
-        principal_name = html.escape(principal_info.get("principal_name", ""))
-        return HTMLResponse(
-            LOGIN_SUCCESS_HTML.replace("{redirect_url}", js_safe_url).replace(
-                "{principal_name}", principal_name
-            ),
-            status_code=200,
+        return _issue_auth_code_and_render(
+            session=session,
+            principal_id=principal_info["principal_id"],
+            principal_name=principal_info["principal_name"],
+            api_key=api_key,
         )
 
     # -----------------------------------------------------------------------
@@ -850,6 +866,27 @@ def register_login_routes(mcp_server: Any) -> None:
                 status_code=400,
             )
 
+        session_exp = session.get("exp")
+        if session_exp is not None and session_exp < time.time():
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Your sign-in session has expired. Please restart the connection.",
+                ),
+                status_code=400,
+            )
+
+        required_session_fields = ("client_id", "redirect_uri", "code_challenge")
+        missing = [f for f in required_session_fields if not session.get(f)]
+        if missing:
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    "Malformed sign-in session. Please restart the connection.",
+                ),
+                status_code=400,
+            )
+
         google_redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "")
         try:
             tokens = await google.exchange_code_for_tokens(code, google_redirect_uri)
@@ -887,34 +924,9 @@ def register_login_routes(mcp_server: Any) -> None:
             )
 
         api_key = resolved.get("api_key", "")
-        auth_code_jwt = jwt_encode(
-            {
-                "type": "auth_code",
-                "client_id": session["client_id"],
-                "redirect_uri": session["redirect_uri"],
-                "redirect_uri_explicit": session.get("redirect_uri_explicit", True),
-                "code_challenge": session["code_challenge"],
-                "scopes": session.get("scopes", ["memory"]),
-                "principal_id": resolved["principal_id"],
-                "principal_name": resolved["principal_name"],
-                "api_key_obf": _obfuscate_key(api_key),
-                "exp": time.time() + AUTH_CODE_TTL,
-            }
-        )
-
-        redirect_uri = session["redirect_uri"]
-        parsed = urlparse(redirect_uri)
-        params = {"code": auth_code_jwt}
-        if session.get("state"):
-            params["state"] = session["state"]
-        separator = "&" if parsed.query else "?"
-        redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
-
-        js_safe_url = json.dumps(redirect_url)[1:-1]
-        principal_name = html.escape(resolved.get("principal_name", ""))
-        return HTMLResponse(
-            LOGIN_SUCCESS_HTML.replace("{redirect_url}", js_safe_url).replace(
-                "{principal_name}", principal_name
-            ),
-            status_code=200,
+        return _issue_auth_code_and_render(
+            session=session,
+            principal_id=resolved["principal_id"],
+            principal_name=resolved["principal_name"],
+            api_key=api_key,
         )
