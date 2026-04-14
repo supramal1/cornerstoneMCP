@@ -24,26 +24,25 @@ import httpx
 
 logger = logging.getLogger("cornerstone.oauth.google")
 
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "")
-GOOGLE_HOSTED_DOMAIN = os.environ.get("GOOGLE_HOSTED_DOMAIN", "charlieoscar.com")
-
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 
 
 def _env_client_id() -> str:
-    return os.environ.get("GOOGLE_CLIENT_ID", GOOGLE_CLIENT_ID)
+    return os.environ.get("GOOGLE_CLIENT_ID", "")
 
 
 def _env_client_secret() -> str:
-    return os.environ.get("GOOGLE_CLIENT_SECRET", GOOGLE_CLIENT_SECRET)
+    return os.environ.get("GOOGLE_CLIENT_SECRET", "")
+
+
+def _env_redirect_uri() -> str:
+    return os.environ.get("GOOGLE_REDIRECT_URI", "")
 
 
 def _env_hosted_domain() -> str:
-    return os.environ.get("GOOGLE_HOSTED_DOMAIN", GOOGLE_HOSTED_DOMAIN)
+    return os.environ.get("GOOGLE_HOSTED_DOMAIN", "charlieoscar.com")
 
 
 def is_configured() -> bool:
@@ -90,7 +89,7 @@ async def verify_id_token(id_token: str) -> Optional[dict]:
         return None
 
     email_verified = claims.get("email_verified")
-    if email_verified not in (True, "true", "True"):
+    if not (email_verified is True or str(email_verified).lower() == "true"):
         logger.warning("id_token email not verified")
         return None
 
@@ -116,7 +115,7 @@ def build_authorization_url(state_jwt: str) -> str:
 
     params = {
         "client_id": _env_client_id(),
-        "redirect_uri": os.environ.get("GOOGLE_REDIRECT_URI", GOOGLE_REDIRECT_URI),
+        "redirect_uri": _env_redirect_uri(),
         "response_type": "code",
         "scope": "openid email profile",
         "state": state_jwt,
