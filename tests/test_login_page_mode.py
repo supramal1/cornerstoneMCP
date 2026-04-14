@@ -107,3 +107,21 @@ def test_google_unconfigured_falls_back_to_api_key(monkeypatch, build_app):
     assert resp.status_code == 200
     body = resp.text
     assert 'name="api_key"' in body
+
+
+def test_google_unconfigured_but_api_key_allowed_shows_api_key_only(monkeypatch, build_app):
+    """Row 4: no Google creds + ALLOW_API_KEY_LOGIN=true → API key form only, no Google link."""
+    monkeypatch.setenv("OAUTH_JWT_SECRET", "test-jwt-secret")
+    monkeypatch.setenv("ALLOW_API_KEY_LOGIN", "true")
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    session = _session()
+
+    app = build_app()
+    client = TestClient(app)
+    resp = client.get(f"/oauth/login?session={session}")
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'name="api_key"' in body
+    assert "Sign in with Google" not in body

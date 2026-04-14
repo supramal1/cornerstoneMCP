@@ -638,8 +638,6 @@ def register_login_routes(mcp_server: Any) -> None:
 
     @mcp_server.custom_route("/oauth/login", methods=["GET"])
     async def login_page(request: Request) -> Response:
-        from auth import google as google_auth
-
         session_jwt = request.query_params.get("session", "")
         if not session_jwt:
             return HTMLResponse(
@@ -662,7 +660,7 @@ def register_login_routes(mcp_server: Any) -> None:
 
         escaped_session = html.escape(session_jwt)
         allow_api_key = os.environ.get("ALLOW_API_KEY_LOGIN", "").lower() == "true"
-        google_configured = google_auth.is_configured()
+        google_configured = google.is_configured()
 
         google_html = (
             LOGIN_GOOGLE_SECTION.replace("{session_jwt}", escaped_session)
