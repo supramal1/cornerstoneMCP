@@ -443,7 +443,7 @@ def get_api_key_from_token(token_str: str) -> str | None:
 # Login page HTML
 # ---------------------------------------------------------------------------
 
-LOGIN_PAGE_HTML = """<!DOCTYPE html>
+LOGIN_PAGE_SHELL = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -460,87 +460,27 @@ LOGIN_PAGE_HTML = """<!DOCTYPE html>
             align-items: center;
             justify-content: center;
         }
-        .container {
-            width: 100%;
-            max-width: 420px;
-            padding: 2rem;
-        }
-        .logo {
-            font-size: 1.5rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            margin-bottom: 0.5rem;
-        }
-        .subtitle {
-            color: #888;
-            font-size: 0.875rem;
-            margin-bottom: 2rem;
-        }
-        .card {
-            background: #141414;
-            border: 1px solid #262626;
-            border-radius: 12px;
-            padding: 1.5rem;
-        }
-        label {
-            display: block;
-            font-size: 0.8125rem;
-            font-weight: 500;
-            color: #a1a1a1;
-            margin-bottom: 0.5rem;
-        }
+        .container { width: 100%; max-width: 420px; padding: 2rem; }
+        .logo { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.5rem; }
+        .subtitle { color: #888; font-size: 0.875rem; margin-bottom: 2rem; }
+        .card { background: #141414; border: 1px solid #262626; border-radius: 12px; padding: 1.5rem; }
+        label { display: block; font-size: 0.8125rem; font-weight: 500; color: #a1a1a1; margin-bottom: 0.5rem; }
         input[type="password"], input[type="text"] {
-            width: 100%;
-            padding: 0.625rem 0.75rem;
-            background: #0a0a0a;
-            border: 1px solid #333;
-            border-radius: 8px;
-            color: #fafafa;
-            font-size: 0.875rem;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            outline: none;
-            transition: border-color 0.15s;
+            width: 100%; padding: 0.625rem 0.75rem; background: #0a0a0a; border: 1px solid #333;
+            border-radius: 8px; color: #fafafa; font-size: 0.875rem;
+            font-family: 'SF Mono', 'Fira Code', monospace; outline: none; transition: border-color 0.15s;
         }
-        input:focus {
-            border-color: #666;
+        input:focus { border-color: #666; }
+        .help { font-size: 0.75rem; color: #666; margin-top: 0.5rem; }
+        button, .google-btn {
+            width: 100%; padding: 0.625rem; margin-top: 1.25rem; background: #fafafa;
+            color: #0a0a0a; border: none; border-radius: 8px; font-size: 0.875rem;
+            font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+            text-decoration: none; display: block; text-align: center;
         }
-        .help {
-            font-size: 0.75rem;
-            color: #666;
-            margin-top: 0.5rem;
-        }
-        button {
-            width: 100%;
-            padding: 0.625rem;
-            margin-top: 1.25rem;
-            background: #fafafa;
-            color: #0a0a0a;
-            border: none;
-            border-radius: 8px;
-            font-size: 0.875rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.15s;
-        }
-        button:hover { opacity: 0.9; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .error {
-            background: #1a0000;
-            border: 1px solid #4a1515;
-            color: #f87171;
-            padding: 0.75rem;
-            border-radius: 8px;
-            font-size: 0.8125rem;
-            margin-bottom: 1rem;
-            display: none;
-        }
-        .error.visible { display: block; }
-        .footer {
-            text-align: center;
-            margin-top: 1.5rem;
-            font-size: 0.75rem;
-            color: #555;
-        }
+        button:hover, .google-btn:hover { opacity: 0.9; }
+        .divider { text-align: center; color: #555; font-size: 0.75rem; margin: 1.5rem 0 0.5rem; }
+        .footer { text-align: center; margin-top: 1.5rem; font-size: 0.75rem; color: #555; }
     </style>
 </head>
 <body>
@@ -548,39 +488,25 @@ LOGIN_PAGE_HTML = """<!DOCTYPE html>
         <div class="logo">Cornerstone</div>
         <div class="subtitle">Connect your memory to Claude Desktop</div>
         <div class="card">
-            <div id="error" class="error"></div>
-            <form id="loginForm" method="POST" action="/oauth/login">
-                <input type="hidden" name="session" value="{session_jwt}" />
-                <label for="api_key">API Key</label>
-                <input
-                    type="password"
-                    id="api_key"
-                    name="api_key"
-                    placeholder="csk_..."
-                    autocomplete="off"
-                    required
-                />
-                <div class="help">
-                    Find your API key in the Cornerstone dashboard under Settings.
-                </div>
-                <button type="submit" id="submitBtn">Connect</button>
-            </form>
+            {google_section}
+            {api_key_section}
         </div>
-        <div class="footer">
-            Your key is validated and never stored in plaintext.
-        </div>
+        <div class="footer">Your credentials are verified by Google. Nothing is stored in plaintext.</div>
     </div>
-    <script>
-        const form = document.getElementById('loginForm');
-        const btn = document.getElementById('submitBtn');
-        const errorDiv = document.getElementById('error');
-        form.addEventListener('submit', () => {
-            btn.disabled = true;
-            btn.textContent = 'Connecting...';
-        });
-    </script>
 </body>
 </html>"""
+
+LOGIN_GOOGLE_SECTION = """<a class="google-btn" href="/oauth/google/start?session={session_jwt}">Sign in with Google</a>"""
+
+LOGIN_API_KEY_SECTION = """<form method="POST" action="/oauth/login" style="margin-top: 1rem;">
+    <input type="hidden" name="session" value="{session_jwt}" />
+    <label for="api_key">API Key</label>
+    <input type="password" id="api_key" name="api_key" placeholder="csk_..." autocomplete="off" required />
+    <div class="help">Find your API key in the Cornerstone dashboard under Settings.</div>
+    <button type="submit">Connect with API Key</button>
+</form>"""
+
+LOGIN_DIVIDER = """<div class="divider">— or —</div>"""
 
 LOGIN_ERROR_REDIRECT = """<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Error</title>
@@ -712,6 +638,8 @@ def register_login_routes(mcp_server: Any) -> None:
 
     @mcp_server.custom_route("/oauth/login", methods=["GET"])
     async def login_page(request: Request) -> Response:
+        from auth import google as google_auth
+
         session_jwt = request.query_params.get("session", "")
         if not session_jwt:
             return HTMLResponse(
@@ -731,9 +659,29 @@ def register_login_routes(mcp_server: Any) -> None:
                 ),
                 status_code=400,
             )
-        return HTMLResponse(
-            LOGIN_PAGE_HTML.replace("{session_jwt}", html.escape(session_jwt))
+
+        escaped_session = html.escape(session_jwt)
+        allow_api_key = os.environ.get("ALLOW_API_KEY_LOGIN", "").lower() == "true"
+        google_configured = google_auth.is_configured()
+
+        google_html = (
+            LOGIN_GOOGLE_SECTION.replace("{session_jwt}", escaped_session)
+            if google_configured
+            else ""
         )
+        api_key_html = (
+            LOGIN_API_KEY_SECTION.replace("{session_jwt}", escaped_session)
+            if (allow_api_key or not google_configured)
+            else ""
+        )
+        if google_html and api_key_html:
+            api_key_html = LOGIN_DIVIDER + api_key_html
+
+        page = (
+            LOGIN_PAGE_SHELL.replace("{google_section}", google_html)
+            .replace("{api_key_section}", api_key_html)
+        )
+        return HTMLResponse(page)
 
     @mcp_server.custom_route("/oauth/login", methods=["POST"])
     async def login_submit(request: Request) -> Response:
