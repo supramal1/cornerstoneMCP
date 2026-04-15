@@ -74,9 +74,13 @@ def _prompt_instance_url() -> str:
 
 
 def _ping_instance(url: str) -> bool:
+    # The MCP server doesn't expose /health — use the OAuth 2.1 discovery
+    # endpoint instead. A 200 there proves the service is up AND has the
+    # auth surface the CLI depends on.
+    probe = f"{url}/.well-known/oauth-authorization-server"
     with ui.spinner(f"Checking {url}..."):
         try:
-            resp = httpx.get(f"{url}/health", timeout=8.0)
+            resp = httpx.get(probe, timeout=8.0)
         except httpx.HTTPError as exc:
             ui.fail(f"Could not reach {url}: {exc}")
             return False
