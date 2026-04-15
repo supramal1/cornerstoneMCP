@@ -36,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
         choices=["connect", "install", "health", "workspaces", "tools"],
         help="Skip the menu and jump directly to a mode",
     )
+    parser.add_argument(
+        "--key",
+        help="API key for headless mode (skips interactive auth, connect mode only)",
+    )
     args = parser.parse_args(argv)
 
     if args.version:
@@ -50,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         if mode is None:
             ui.skip("Goodbye")
             return 0
-        _dispatch(mode)
+        _dispatch(mode, api_key=args.key)
     except KeyboardInterrupt:
         ui.console.print()
         ui.skip("Interrupted — nothing saved beyond the last confirmed step")
@@ -91,9 +95,9 @@ def _choose_mode() -> str | None:
     return choice
 
 
-def _dispatch(mode: str) -> None:
+def _dispatch(mode: str, *, api_key: str | None = None) -> None:
     if mode == "connect":
-        connect.run_connect()
+        connect.run_connect(api_key=api_key)
     elif mode == "install":
         wizard.run_fresh_install()
     elif mode == "health":
@@ -244,8 +248,25 @@ def _run_reconfigure_tools() -> None:
         spec = TOOLS[key]
         try:
             if action == "add":
-                path = tools.configure_tool(spec, instance_url, token)
-                ui.ok(f"{spec.name} → {path}")
+                if key == "claude_desktop":
+                    ui.panel(
+                        tools.CLAUDE_DESKTOP_INSTRUCTIONS.format(mcp_url=instance_url),
+                        title="Claude Desktop — use the Connectors UI",
+                        style="blue",
+                    )
+                    use_bridge = questionary.confirm(
+                        "Alternatively, configure a local bridge? "
+                        "(for older Claude Desktop versions without Connectors UI)",
+                        default=False,
+                    ).unsafe_ask()
+                    if not use_bridge:
+                        ui.skip(f"{spec.name}: see instructions above")
+                        continue
+                    path = tools.configure_tool(spec, instance_url, token, bridge=True)
+                    ui.ok(f"{spec.name} bridge → {path}")
+                else:
+                    path = tools.configure_tool(spec, instance_url, token)
+                    ui.ok(f"{spec.name} → {path}")
             else:
                 removed = tools.unconfigure_tool(spec)
                 if removed:

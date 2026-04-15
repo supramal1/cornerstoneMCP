@@ -29,7 +29,7 @@ from .config import (
 )
 
 
-def run_connect() -> None:
+def run_connect(*, api_key: str | None = None) -> None:
     ui.divider("Connect to Existing Cornerstone Instance")
     ui.info("Target: under 5 minutes.")
 
@@ -41,7 +41,7 @@ def run_connect() -> None:
             ui.skip("Connect cancelled")
             return
 
-    creds = _run_auth(instance_url)
+    creds = _run_auth(instance_url, prefill_key=api_key)
     if creds is None:
         return
 
@@ -90,23 +90,34 @@ def _ping_instance(url: str) -> bool:
 # ── Auth dispatch ────────────────────────────────────────────────────────
 
 
-def _run_auth(instance_url: str) -> dict | None:
+def _run_auth(instance_url: str, *, prefill_key: str | None = None) -> dict | None:
+    # Headless / CI path: key supplied up front, skip the menu entirely.
+    if prefill_key:
+        try:
+            return auth.api_key_flow(instance_url, prefill=prefill_key)
+        except auth.AuthError as exc:
+            ui.fail(f"API key rejected: {exc}")
+            return None
+
     method = questionary.select(
         "How do you want to sign in?",
         choices=[
-            questionary.Choice("Google (recommended — uses browser)", value="google"),
+            questionary.Choice(
+                "Browser sign-in (recommended — OAuth 2.1 via MCP server)",
+                value="oauth",
+            ),
             questionary.Choice("API key (paste from an admin)", value="api_key"),
         ],
-        default="google",
+        default="oauth",
     ).unsafe_ask()
 
     try:
-        if method == "google":
-            return auth.google_oauth_flow(instance_url)
+        if method == "oauth":
+            return auth.oauth_login_flow(instance_url)
         return auth.api_key_flow(instance_url)
     except auth.AuthError as exc:
         ui.fail(f"Authentication failed: {exc}")
-        if method == "google" and questionary.confirm(
+        if method == "oauth" and questionary.confirm(
             "Fall back to API key?", default=True
         ).unsafe_ask():
             try:
@@ -151,6 +162,28 @@ def _configure_detected_tools(instance_url: str, token: str) -> list[tuple[str, 
     results: list[tuple[str, bool]] = []
     for key in to_configure:
         spec = TOOLS[key]
+        if key == "claude_desktop":
+            ui.panel(
+                tools.CLAUDE_DESKTOP_INSTRUCTIONS.format(mcp_url=instance_url),
+                title="Claude Desktop — use the Connectors UI",
+                style="blue",
+            )
+            use_bridge = questionary.confirm(
+                "Alternatively, configure a local bridge? "
+                "(for older Claude Desktop versions without Connectors UI)",
+                default=False,
+            ).unsafe_ask()
+            if not use_bridge:
+                results.append((spec.name, True))
+                continue
+            try:
+                path = tools.configure_tool(spec, instance_url, token, bridge=True)
+                ui.ok(f"{spec.name} bridge → {path}")
+                results.append((spec.name, True))
+            except Exception as exc:
+                ui.fail(f"{spec.name}: {exc}")
+                results.append((spec.name, False))
+            continue
         try:
             path = tools.configure_tool(spec, instance_url, token)
             ui.ok(f"{spec.name} → {path}")

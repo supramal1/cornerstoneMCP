@@ -137,11 +137,15 @@ def _configure_http_json(
     _write_json(path, data)
 
 
-def _configure_claude_desktop(path: Path, mcp_url: str, token: str, server_key: str) -> None:
-    """Claude Desktop needs a stdio bridge for remote MCP.
+def _configure_claude_desktop_bridge(
+    path: Path, mcp_url: str, token: str, server_key: str
+) -> None:
+    """Opt-in stdio bridge for users who can't use the Connectors UI.
 
-    Uses ``npx mcp-remote`` which is the official bridge. Users need Node
-    installed, but we surface that requirement explicitly in the summary.
+    Writes an ``npx mcp-remote`` launcher into ``claude_desktop_config.json``.
+    Requires Node on the user's PATH. Only used when the user explicitly
+    asks for the bridge — the default Claude Desktop path is the in-app
+    Connectors UI (see ``CLAUDE_DESKTOP_INSTRUCTIONS``).
     """
     data = _load_json(path)
     servers = data.setdefault("mcpServers", {})
@@ -156,6 +160,18 @@ def _configure_claude_desktop(path: Path, mcp_url: str, token: str, server_key: 
         ],
     }
     _write_json(path, data)
+
+
+CLAUDE_DESKTOP_INSTRUCTIONS = (
+    "Claude Desktop natively supports remote MCP via its Connectors UI —\n"
+    "no config file editing required.\n"
+    "\n"
+    "  1. Open Claude Desktop\n"
+    "  2. Settings  →  Connectors  →  Add custom connector\n"
+    "  3. Paste this URL:\n"
+    "       {mcp_url}\n"
+    "  4. Sign in when prompted (Claude Desktop runs the OAuth flow for you)\n"
+)
 
 
 def _configure_codex_toml(path: Path, mcp_url: str, token: str, server_key: str) -> None:
@@ -196,10 +212,27 @@ def _configure_codex_toml(path: Path, mcp_url: str, token: str, server_key: str)
     path.write_text(body, encoding="utf-8")
 
 
-def configure_tool(spec: ToolSpec, mcp_url: str, token: str) -> Path:
-    """Write the Cornerstone MCP entry into the tool's config. Returns the path."""
+def configure_tool(
+    spec: ToolSpec,
+    mcp_url: str,
+    token: str,
+    *,
+    bridge: bool = False,
+) -> Path | None:
+    """Write the Cornerstone MCP entry into the tool's config.
+
+    Returns the config path when a file was written, or ``None`` when the
+    tool is handled out-of-band (currently only Claude Desktop's default
+    Connectors-UI path, which the caller is expected to announce via
+    ``CLAUDE_DESKTOP_INSTRUCTIONS``).
+
+    ``bridge=True`` forces Claude Desktop to use the opt-in ``npx
+    mcp-remote`` stdio bridge instead of the in-app connector flow.
+    """
     if spec.key == "claude_desktop":
-        _configure_claude_desktop(spec.config_path, mcp_url, token, spec.server_key)
+        if not bridge:
+            return None
+        _configure_claude_desktop_bridge(spec.config_path, mcp_url, token, spec.server_key)
     elif spec.config_format == "json":
         _configure_http_json(spec.config_path, mcp_url, token, spec.server_key)
     elif spec.config_format == "toml":
