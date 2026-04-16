@@ -476,9 +476,10 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     auth_server_provider=_oauth_provider,
     stateless_http=True,
+    streamable_http_path="/",
     auth=AuthSettings(
         issuer_url=AnyHttpUrl(MCP_PUBLIC_URL),
-        resource_server_url=AnyHttpUrl(f"{MCP_PUBLIC_URL}/mcp"),
+        resource_server_url=AnyHttpUrl(MCP_PUBLIC_URL),
         required_scopes=["memory"],
         client_registration_options=ClientRegistrationOptions(
             enabled=True,
