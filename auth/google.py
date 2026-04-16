@@ -94,7 +94,7 @@ async def verify_id_token(id_token: str) -> Optional[dict]:
         return None
 
     expected_hd = _env_hosted_domain()
-    if claims.get("hd") != expected_hd:
+    if expected_hd and claims.get("hd") != expected_hd:
         logger.warning(
             "id_token hd mismatch: expected %s, got %s",
             expected_hd,
