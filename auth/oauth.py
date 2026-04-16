@@ -727,15 +727,17 @@ def register_login_routes(mcp_server: Any) -> None:
     # Google OAuth flow
     # -----------------------------------------------------------------------
 
-    async def _resolve_email_via_backend(email: str, name: str) -> dict | None:
-        # Read at call time so tests and rotated secrets work without re-import.
+    async def _resolve_email_via_backend(
+        email: str, name: str
+    ) -> tuple[dict | None, int]:
+        """Returns (data, status_code). 403 means no invitation found."""
         memory_api_key = MEMORY_API_KEY or os.environ.get("MEMORY_API_KEY", "")
         cornerstone_url = CORNERSTONE_URL or os.environ.get(
             "CORNERSTONE_URL", "http://127.0.0.1:8000"
         )
         if not memory_api_key:
             logger.error("MEMORY_API_KEY not set — cannot call resolve-email")
-            return None
+            return None, 500
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.post(
@@ -743,15 +745,15 @@ def register_login_routes(mcp_server: Any) -> None:
                     headers={"X-API-Key": memory_api_key},
                     json={"email": email, "name": name},
                 )
-                if r.status_code != 200:
-                    logger.error(
-                        "resolve-email failed: %s %s", r.status_code, r.text[:200]
-                    )
-                    return None
-                return r.json()
+                if r.status_code == 200:
+                    return r.json(), 200
+                logger.error(
+                    "resolve-email failed: %s %s", r.status_code, r.text[:200]
+                )
+                return None, r.status_code
         except Exception as e:
             logger.error("resolve-email exception: %s", e)
-            return None
+            return None, 500
 
     @mcp_server.custom_route("/oauth/google/start", methods=["GET"])
     async def google_start(request: Request) -> Response:
@@ -859,7 +861,16 @@ def register_login_routes(mcp_server: Any) -> None:
 
         email = verified["email"]
         name = verified.get("name") or email.split("@")[0]
-        resolved = await _resolve_email_via_backend(email, name)
+        resolved, resolve_status = await _resolve_email_via_backend(email, name)
+        if resolve_status == 403:
+            return HTMLResponse(
+                LOGIN_ERROR_REDIRECT.replace(
+                    "{message}",
+                    f"No invitation found for <strong>{html.escape(email)}</strong>. "
+                    "Ask an admin to send you an invitation, then try again.",
+                ),
+                status_code=403,
+            )
         if not resolved:
             return HTMLResponse(
                 LOGIN_ERROR_REDIRECT.replace(
