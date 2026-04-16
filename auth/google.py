@@ -42,7 +42,7 @@ def _env_redirect_uri() -> str:
 
 
 def _env_hosted_domain() -> str:
-    return os.environ.get("GOOGLE_HOSTED_DOMAIN", "charlieoscar.com")
+    return os.environ.get("GOOGLE_HOSTED_DOMAIN", "")
 
 
 def is_configured() -> bool:
@@ -121,6 +121,8 @@ def build_authorization_url(state_jwt: str) -> str:
         "state": state_jwt,
         "access_type": "online",
         "prompt": "select_account",
-        "hd": _env_hosted_domain(),
     }
+    hd = _env_hosted_domain()
+    if hd:
+        params["hd"] = hd
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
