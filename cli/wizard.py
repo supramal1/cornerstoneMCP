@@ -380,7 +380,7 @@ def _render_summary(results: list[StepResult]) -> None:
         }.get(r.status, r.status)
         tbl.add_row(r.name, colour, r.detail)
     ui.render(tbl)
-    ui.info("Next: run `python -m cli.main` again and pick 'Health check' to verify.")
+    ui.info("Next: run `python3 -m cli.main` again and pick 'Health check' to verify.")
 
 
 def _find_migrations_dir() -> Path | None:

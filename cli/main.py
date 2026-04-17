@@ -1,4 +1,4 @@
-"""Entry point: ``python -m cli.main``.
+"""Entry point: ``python3 -m cli.main``.
 
 Shows the banner, dispatches to one of five modes, and handles graceful
 Ctrl-C / error reporting.

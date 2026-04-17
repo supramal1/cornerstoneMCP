@@ -235,7 +235,11 @@ def oauth_login_flow(instance_url: str) -> dict[str, Any]:
             pass
 
     if not got:
-        raise AuthError("timed out waiting for OAuth callback")
+        raise AuthError(
+            "timed out waiting for OAuth callback. If your browser showed "
+            "'No invitation found', ask your admin to invite you at the "
+            "Cornerstone control panel."
+        )
     if state_obj.error:
         raise AuthError(f"sign-in failed: {state_obj.error}")
     if not state_obj.code:
