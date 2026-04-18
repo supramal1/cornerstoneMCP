@@ -26,6 +26,7 @@ import tools.memory  # noqa: F401 — remember, recall, forget, get_context, add
 import tools.workspace  # noqa: F401 — list/get/switch/set_default workspace
 import tools.retrieval  # noqa: F401 — list_facts, list_notes, get_recent_sessions, list_threads, report_context_feedback
 import tools.sessions  # noqa: F401 — save_conversation
+import tools.steward  # noqa: F401 — steward_inspect, steward_advise, steward_preview, steward_apply, steward_status
 
 
 # ---------------------------------------------------------------------------
