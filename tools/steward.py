@@ -61,6 +61,7 @@ def steward_inspect(
     threshold: float = 0.85,
     days_since_access: int = 90,
     type: str = "fact",
+    filter: str = "",
     limit: int = 50,
     offset: int = 0,
 ) -> str:
@@ -76,6 +77,7 @@ def steward_inspect(
         threshold: Similarity threshold for duplicate detection (0-1). Default: 0.85.
         days_since_access: Number of days without access to consider stale. Default: 90.
         type: Item type to inspect ("fact" or "note"). Default: "fact".
+        filter: Status filter for contradictions: "pending" (default), "resolved", or "all".
         limit: Maximum items to return. Default: 50.
         offset: Pagination offset. Default: 0.
 
@@ -83,6 +85,7 @@ def steward_inspect(
         steward_inspect("duplicates")
         steward_inspect("stale", days_since_access=60)
         steward_inspect("contradictions", limit=10)
+        steward_inspect("contradictions", filter="all")
         steward_inspect("cross-workspace-duplicates", threshold=0.9)
     """
     if operation not in _STEWARD_INSPECT_OPS:
@@ -102,7 +105,8 @@ def steward_inspect(
         if operation == "duplicates":
             params.update({"type": type, "threshold": threshold, "limit": limit})
         elif operation == "contradictions":
-            params.update({"limit": limit, "offset": offset})
+            status = filter if filter else "pending"
+            params.update({"status": status, "limit": limit, "offset": offset})
         elif operation == "stale":
             params.update({"days_since_access": days_since_access, "limit": limit})
         elif operation == "expired":
@@ -486,10 +490,13 @@ def steward_status(namespace: str = "") -> str:
     counts: dict[str, int | str] = {}
     for op, _label in dimensions:
         try:
+            inspect_params: dict = {"namespace": ns, "limit": 1}
+            if op == "contradictions":
+                inspect_params["status"] = "pending"
             with _client() as c:
                 r = c.get(
                     f"/ops/steward/inspect/{op}",
-                    params={"namespace": ns, "limit": 1},
+                    params=inspect_params,
                 )
                 r.raise_for_status()
                 data = r.json()
