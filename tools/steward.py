@@ -48,7 +48,10 @@ _STEWARD_MUTATE_OPS = {
     "consolidate-facts",
     "reembed-stale",
     "rename-keys",
+    "resolve-contradictions",
 }
+
+_TOKEN_OPTIONAL_OPS = {"resolve-contradictions"}
 
 
 @mcp.tool()
@@ -288,7 +291,9 @@ def steward_preview(
     needed to apply. No data is modified.
 
     Operations: merge-duplicates, merge-notes, archive-stale, delete-by-filter,
-    consolidate-facts, reembed-stale, rename-keys.
+    consolidate-facts, reembed-stale, rename-keys, resolve-contradictions.
+
+    Note: resolve-contradictions skips preview — use steward_apply directly.
 
     Args:
         operation: The mutate operation to preview.
@@ -303,6 +308,12 @@ def steward_preview(
         return (
             f"Error: unknown mutate operation '{operation}'. "
             f"Valid operations: {', '.join(sorted(_STEWARD_MUTATE_OPS))}"
+        )
+
+    if operation in _TOKEN_OPTIONAL_OPS:
+        return (
+            f"{operation} does not use a preview step. "
+            f"Use steward_apply(\"{operation}\", params='...') directly."
         )
 
     ns = _resolve_tool_namespace(namespace)
@@ -377,17 +388,21 @@ def steward_apply(
     after 10 minutes.
 
     Operations: merge-duplicates, merge-notes, archive-stale, delete-by-filter,
-    consolidate-facts, reembed-stale, rename-keys.
+    consolidate-facts, reembed-stale, rename-keys, resolve-contradictions.
+
+    resolve-contradictions does not require a token. Pass params with:
+      {"ids": ["uuid1", ...], "resolution": "keep_new"}  — resolve by ID
+      {"filter": "pending", "resolution": "keep_new"}     — bulk resolve
 
     Args:
         operation: The mutate operation to apply.
-        confirmation_token: Token from steward_preview (required, expires after 10 min).
+        confirmation_token: Token from steward_preview (required except resolve-contradictions).
         namespace: Memory namespace (defaults to active workspace).
-        params: JSON string of operation-specific parameters (must match preview).
+        params: JSON string of operation-specific parameters.
 
     Examples:
         steward_apply("merge-duplicates", confirmation_token="tok_abc123...")
-        steward_apply("archive-stale", confirmation_token="tok_def456...", params='{"days_since_access": 60}')
+        steward_apply("resolve-contradictions", params='{"ids": ["uuid1"], "resolution": "keep_new"}')
     """
     if operation not in _STEWARD_MUTATE_OPS:
         return (
@@ -395,7 +410,7 @@ def steward_apply(
             f"Valid operations: {', '.join(sorted(_STEWARD_MUTATE_OPS))}"
         )
 
-    if not confirmation_token:
+    if not confirmation_token and operation not in _TOKEN_OPTIONAL_OPS:
         return "Error: confirmation_token is required. Run steward_preview first to get one."
 
     ns = _resolve_tool_namespace(namespace)
