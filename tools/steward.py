@@ -75,7 +75,7 @@ def steward_inspect(
     """Inspect workspace data quality. Returns structured findings without making any changes.
 
     Operations: duplicates, contradictions, stale, expired, orphans,
-    key-taxonomy, stale-embeddings, cross-workspace-duplicates.
+    key-taxonomy, stale-embeddings, cross-workspace-duplicates, fact-quality.
 
     Args:
         operation: The inspection operation to run.
@@ -122,6 +122,8 @@ def steward_inspect(
             params.update({"type": type, "limit": limit, "offset": offset})
         elif operation == "stale-embeddings":
             params.update({"limit": limit, "offset": offset})
+        elif operation == "fact-quality":
+            params.update({"limit": limit})
 
     try:
         with _client() as c:
