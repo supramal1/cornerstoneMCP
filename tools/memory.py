@@ -27,10 +27,15 @@ from core import (
 
 @mcp.tool()
 def remember(content: str, type: str = "auto") -> str:
-    """Save something to memory. Cornerstone will remember it for future conversations.
+    """Save something to memory. Cornerstone decides whether to store as a
+    fact or note based on content.
 
-    Use this to store anything important: facts, decisions, preferences, notes,
-    meeting outcomes, project details — anything you might need later.
+    If the content is a specific piece of information (a date, a name, a
+    number, a decision), it becomes a fact. Follow the same rules as
+    add_fact: include a date, one topic only, descriptive key.
+
+    If the content is a summary, observation, or multi-topic note, it
+    becomes a note.
 
     Args:
         content: What to remember. Can be a fact ("Malik's email is malik@co.com"),
@@ -41,8 +46,9 @@ def remember(content: str, type: str = "auto") -> str:
               - "note": Freeform observation or note
 
     Examples:
-        remember("The client's budget is $50,000")
-        remember("Meeting decided to postpone launch to Q2")
+        remember('Nike QBR is scheduled for 15 May 2026') → fact
+        remember('Meeting with James covered equity terms, office
+                 move timeline, and onboarding plan') → note
         remember("Malik prefers morning meetings", type="fact")
     """
     ns = _resolve_tool_namespace()
@@ -475,10 +481,63 @@ def add_fact(
     Facts are key-value pairs that persist across sessions. If a fact with
     the same key already exists in the namespace, it will be updated.
 
+    FORMATTING RULES (the model MUST follow these):
+
+    VALUE:
+    - MUST include a date (e.g. '2026-04-19', 'April 2026',
+      'as of Q2 2026'). Every fact needs a temporal anchor so
+      retrieval can distinguish current from outdated information.
+    - MUST be one topic only. If you have multiple pieces of
+      information, call add_fact multiple times.
+    - MUST be under 200 tokens. If longer, split into multiple
+      facts.
+    - Use factual declarative language, not narrative.
+      Good: 'Kim Berkin is MD at Charlie Oscar as of April 2026.
+            Previously MD at DentsuX and Fetch.'
+      Bad:  'Kim is basically the boss and she used to work at
+            some other agencies'
+    - Include enough context to be self-contained. A fact
+      retrieved on its own should make sense without needing
+      the conversation that created it.
+
+    KEY:
+    - Use snake_case with descriptive names.
+    - Describe WHAT the fact is about, not WHEN.
+      Good: 'kim_berkin_role', 'nike_q3_budget'
+      Bad:  'latest_update', 'most_recent_sprint', 'current_status'
+    - Temporal words in keys (latest, current, most_recent, last)
+      create facts that rot — the key implies currency that the
+      value can't maintain.
+
+    BEFORE WRITING:
+    - Check if a fact with this key already exists using
+      get_context or search. If it does and your new value is
+      a subset of the existing value, DO NOT overwrite — the
+      existing fact is more comprehensive.
+
+    Examples:
+      Good: add_fact('nike_q3_budget', 'Nike Q3 2026 budget
+            approved at £200k on 2026-04-19')
+      Good: add_fact('kim_berkin_role', 'Kim Berkin is Managing
+            Director at Charlie Oscar as of April 2026. Previously
+            MD at DentsuX and Fetch.')
+      Bad:  add_fact('latest_budget', 'budget is 200k')
+      Bad:  add_fact('kim_info', 'Kim is MD and she used to work
+            at Fetch and DentsuX and she also worked at Heineken
+            and she interviewed Malik with Dan')
+
     Args:
-        key: Unique identifier for this fact (e.g. "user_timezone", "project_deadline").
-        value: The fact content.
-        category: Fact category (e.g. "preference", "project", "personal", "general").
+        key: Unique identifier. Use snake_case. Describe the topic, not the
+            time. No temporal words (latest, current, most_recent, last).
+            Examples: 'nike_q3_budget', 'kim_berkin_role',
+            'cornerstone_sprint_rr_complete'
+        value: The fact content. MUST include a date. MUST be one topic only.
+            MUST be under 200 tokens. Use factual declarative language. Must
+            be self-contained — readable without conversation context.
+        category: Fact category. Options: 'personal' (user info), 'agency'
+            (org info), 'project' (build work), 'infrastructure'
+            (technical/deployment), 'general' (everything else). Choose the
+            most specific.
         namespace: Memory namespace (defaults to active workspace).
         confidence: Confidence score 0-1.
     """

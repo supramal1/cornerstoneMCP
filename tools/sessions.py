@@ -29,6 +29,12 @@ def save_conversation(
     explicitly asks to save the conversation, or at natural conversation
     endpoints where the user has shared important information.
 
+    When extracting facts from the conversation, follow the add_fact
+    formatting rules: each fact must have a date, one topic only, under
+    200 tokens, descriptive snake_case key with no temporal words. Check
+    existing facts before creating new ones — do not create a fact that
+    is a subset of an existing comprehensive fact.
+
     Args:
         messages: The conversation messages as a list of dicts with
                   "role" and "content" keys.
