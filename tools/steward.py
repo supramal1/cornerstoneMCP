@@ -21,6 +21,9 @@ from core import (
     session_buffer,
 )
 
+# WARNING: Adding a new inspect operation in the backend (cornerstone repo)
+# also requires registration here. If you add there but not here, the
+# operation works via API but not via MCP tools (Claude Desktop, Claude Code).
 _STEWARD_INSPECT_OPS = {
     "duplicates",
     "contradictions",
@@ -30,6 +33,10 @@ _STEWARD_INSPECT_OPS = {
     "key-taxonomy",
     "stale-embeddings",
     "cross-workspace-duplicates",
+    "retrieval-interference",
+    "missing-dates",
+    "composite-health",
+    "fact-quality",
 }
 
 _STEWARD_ADVISE_OPS = {
