@@ -77,6 +77,7 @@ def save_conversation(
                 "agent_id": DEFAULT_AGENT_ID,
                 "source": "mcp-save-conversation",
                 "force": True,
+                "async_mode": True,
             }
             if topic:
                 payload["topic"] = topic
@@ -89,6 +90,7 @@ def save_conversation(
         return f"Error (save_conversation): cannot reach Cornerstone API — {e}"
 
     session_id = data.get("session_id") or "unknown"
+    status = data.get("status", "")
     episodic = data.get("episodic_count", 0)
     semantic = data.get("semantic_count", 0)
     entities = data.get("entities_staged", 0)
@@ -103,18 +105,23 @@ def save_conversation(
             f"for key items."
         )
 
-    parts = [f"[{ns}] Conversation saved (session {session_id[:8]}...):"]
-    parts.append(f"  Episodic memories: {episodic}")
-    parts.append(f"  Semantic memories: {semantic}")
-    if entities:
-        parts.append(f"  Entities staged: {entities}")
-    if relations:
-        parts.append(f"  Relations staged: {relations}")
+    # Async mode: extraction is processing in background
+    if status == "processing":
+        parts = [f"[{ns}] Conversation saved (session {session_id[:8]}...)."]
+        parts.append("  Extraction processing in background — memories will appear shortly.")
+    else:
+        parts = [f"[{ns}] Conversation saved (session {session_id[:8]}...):"]
+        parts.append(f"  Episodic memories: {episodic}")
+        parts.append(f"  Semantic memories: {semantic}")
+        if entities:
+            parts.append(f"  Entities staged: {entities}")
+        if relations:
+            parts.append(f"  Relations staged: {relations}")
     if errors:
         parts.append(f"  Errors: {'; '.join(errors)}")
 
     summary_note = []
-    if episodic == 0 and semantic == 0 and entities == 0:
+    if status != "processing" and episodic == 0 and semantic == 0 and entities == 0:
         summary_note.append(
             "Note: no memories extracted. The conversation may have been too "
             "short or lacked durable information. Use remember() or add_fact() "
