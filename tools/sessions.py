@@ -22,25 +22,38 @@ def save_conversation(
     namespace: str = "",
 ) -> str:
     """Save a conversation to memory. Cornerstone will extract key information,
-    create a summary, and link it to related conversations.
+    create a summary, and link it to related conversations. Each save also
+    feeds the personalisation system, helping Cornerstone learn how each
+    team member works.
 
-    Call this at the end of a meaningful conversation to preserve it.
-    The AI should NOT call this for every turn — only when the user
-    explicitly asks to save the conversation, or at natural conversation
-    endpoints where the user has shared important information.
+    Only save business-relevant conversations. Do not save personal
+    conversations (furniture shopping, cinema plans, recipes, personal
+    finance) or general knowledge questions unrelated to agency work.
+    The test: would another CO team member or a future session benefit
+    from this being in the system? If yes, save. If no, don't.
 
-    When extracting facts from the conversation, follow the add_fact
-    formatting rules: each fact must have a date, one topic only, under
-    200 tokens, descriptive snake_case key with no temporal words. Check
-    existing facts before creating new ones — do not create a fact that
-    is a subset of an existing comprehensive fact.
+    Call this proactively at natural conversation breakpoints when the
+    topic is business-related:
+    - After a meaningful exchange (decision made, information shared, problem solved)
+    - When switching topics within a session (save what you've covered before moving on)
+    - At natural breaks in long business sessions (every 15-20 substantive exchanges)
+    - At the end of every business-relevant session
+    - When the user explicitly asks
+
+    Do NOT wait for the user to ask for business content. If you've had
+    10-15 substantive business exchanges without saving, save now.
+    Do NOT save purely personal or off-topic conversations.
 
     Args:
         messages: The conversation messages as a list of dicts with
                   "role" and "content" keys.
                   Example: [{"role": "user", "content": "..."},
                             {"role": "assistant", "content": "..."}]
-        topic: Optional topic name for the conversation.
+        topic: Optional topic name for the conversation. Always provide
+               a descriptive topic (e.g. "Nike Q2 budget discussion",
+               "Supermemory migration architecture decisions",
+               "Sprint planning April 21"). This helps with retrieval
+               and organisation.
         namespace: Memory namespace (defaults to active workspace).
     """
     ns = _resolve_tool_namespace(namespace)
