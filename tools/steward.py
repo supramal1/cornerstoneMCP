@@ -74,8 +74,17 @@ def steward_inspect(
 ) -> str:
     """Inspect workspace data quality. Returns structured findings without making any changes.
 
-    Operations: duplicates, contradictions, stale, expired, orphans,
-    key-taxonomy, stale-embeddings, cross-workspace-duplicates, fact-quality.
+    Active operations (Supermemory-backed):
+        duplicates, stale, expired, orphans, key-taxonomy, fact-quality,
+        missing-dates, composite-health, retrieval-interference,
+        cross-workspace-duplicates.
+
+    Deferred / not-applicable (retained for API compatibility, return
+    empty with a status note):
+        contradictions — moved to CRAG at query time; see /answer
+            retrieval metadata for per-query conflict surfaces.
+        stale-embeddings — Supermemory owns embeddings, nothing to
+            inspect.
 
     Args:
         operation: The inspection operation to run.
@@ -84,15 +93,14 @@ def steward_inspect(
         threshold: Similarity threshold for duplicate detection (0-1). Default: 0.85.
         days_since_access: Number of days without access to consider stale. Default: 90.
         type: Item type to inspect ("fact" or "note"). Default: "fact".
-        filter: Status filter for contradictions: "pending" (default), "resolved", or "all".
+        filter: (legacy) Status filter formerly used by contradictions.
         limit: Maximum items to return. Default: 50.
         offset: Pagination offset. Default: 0.
 
     Examples:
         steward_inspect("duplicates")
         steward_inspect("stale", days_since_access=60)
-        steward_inspect("contradictions", limit=10)
-        steward_inspect("contradictions", filter="all")
+        steward_inspect("fact-quality", limit=25)
         steward_inspect("cross-workspace-duplicates", threshold=0.9)
     """
     if operation not in _STEWARD_INSPECT_OPS:
@@ -184,7 +192,11 @@ def steward_advise(
     Pass items as a JSON string. The AI analyzes the items and returns
     actionable recommendations.
 
-    Operations: merge, consolidate, stale-review, key-taxonomy, contradictions.
+    Active operations: merge, consolidate, stale-review, key-taxonomy.
+
+    Deferred (retained for API compatibility):
+        contradictions — detection moved to CRAG at query time; there
+            are no pending pairs to advise on.
 
     Args:
         operation: The advise operation to run.
@@ -197,7 +209,7 @@ def steward_advise(
 
     Examples:
         steward_advise("merge", '[{"id": "a", "key": "foo"}, {"id": "b", "key": "foo_bar"}]')
-        steward_advise("contradictions", '[{"fact_a": {...}, "fact_b": {...}}]')
+        steward_advise("consolidate", '[{"id": "a", "value": "..."}]')
     """
     if operation not in _STEWARD_ADVISE_OPS:
         return (
@@ -303,10 +315,13 @@ def steward_preview(
     Returns the exact changes that would be made and a confirmation_token
     needed to apply. No data is modified.
 
-    Operations: merge-duplicates, merge-notes, archive-stale, delete-by-filter,
-    consolidate-facts, reembed-stale, rename-keys, resolve-contradictions.
+    Active operations: merge-duplicates, merge-notes, archive-stale,
+    delete-by-filter, consolidate-facts, rename-keys.
 
-    Note: resolve-contradictions skips preview — use steward_apply directly.
+    Deferred / not-applicable:
+        resolve-contradictions — retired; CRAG now handles conflicts
+            at query time. Returns a deferred no-op.
+        reembed-stale — Supermemory owns embeddings, nothing to reembed.
 
     Args:
         operation: The mutate operation to preview.
@@ -400,16 +415,17 @@ def steward_apply(
     Requires a valid confirmation_token from steward_preview. Tokens expire
     after 10 minutes.
 
-    Operations: merge-duplicates, merge-notes, archive-stale, delete-by-filter,
-    consolidate-facts, reembed-stale, rename-keys, resolve-contradictions.
+    Active operations: merge-duplicates, merge-notes, archive-stale,
+    delete-by-filter, consolidate-facts, rename-keys.
 
-    resolve-contradictions does not require a token. Pass params with:
-      {"ids": ["uuid1", ...], "resolution": "keep_new"}  — resolve by ID
-      {"filter": "pending", "resolution": "keep_new"}     — bulk resolve
+    Deferred / not-applicable (retained for API compatibility):
+        resolve-contradictions — CRAG handles conflicts at query time;
+            calling this returns a deferred no-op.
+        reembed-stale — Supermemory owns embeddings.
 
     Args:
         operation: The mutate operation to apply.
-        confirmation_token: Token from steward_preview (required except resolve-contradictions).
+        confirmation_token: Token from steward_preview.
         namespace: Memory namespace (defaults to active workspace).
         params: JSON string of operation-specific parameters.
 
@@ -471,9 +487,12 @@ def steward_apply(
 def steward_status(namespace: str = "") -> str:
     """Get a summary of workspace health across all steward dimensions.
 
-    Returns counts of duplicates, contradictions, stale items, expired facts,
-    orphans, key inconsistencies, and stale embeddings. Use this as a
-    starting point to identify areas that need maintenance.
+    Active dimensions: duplicate candidates, stale items, expired facts,
+    orphan notes, key inconsistencies.
+
+    Retired dimensions shown for visibility only:
+        Contradictions — moved to CRAG at query time.
+        Stale embeddings — Supermemory owns embeddings.
 
     Args:
         namespace: Memory namespace (defaults to active workspace).
@@ -486,30 +505,31 @@ def steward_status(namespace: str = "") -> str:
     if not ns:
         return _no_workspace_error()
 
-    dimensions = [
+    # Active dimensions contribute to the "Total issues" tally.
+    active_dimensions = [
         ("duplicates", "Duplicate candidates"),
-        ("contradictions", "Contradictions"),
         ("stale", "Stale items (90+ days)"),
         ("expired", "Expired facts"),
         ("orphans", "Orphan notes"),
         ("key-taxonomy", "Key inconsistencies"),
-        ("stale-embeddings", "Stale embeddings"),
+    ]
+    # Retained in the render for muscle-memory, but flagged as retired
+    # so users aren't confused by "0" meaning "no issues".
+    retired_dimensions = [
+        ("contradictions", "Contradictions", "CRAG / query-time"),
+        ("stale-embeddings", "Stale embeddings", "SM-owned"),
     ]
 
     counts: dict[str, int | str] = {}
-    for op, _label in dimensions:
+    for op, _label in active_dimensions:
         try:
-            inspect_params: dict = {"namespace": ns, "limit": 1}
-            if op == "contradictions":
-                inspect_params["status"] = "pending"
             with _client() as c:
                 r = c.get(
                     f"/ops/steward/inspect/{op}",
-                    params=inspect_params,
+                    params={"namespace": ns, "limit": 1},
                 )
                 r.raise_for_status()
-                data = r.json()
-                counts[op] = data.get("total", 0)
+                counts[op] = r.json().get("total", 0)
         except Exception:
             counts[op] = "error"
 
@@ -517,16 +537,20 @@ def steward_status(namespace: str = "") -> str:
 
     lines = [
         f"Workspace Health Summary (namespace: {ns})",
-        "\u2500" * 37,
+        "\u2500" * 44,
     ]
-    for op, label in dimensions:
+    for op, label in active_dimensions:
         val = counts[op]
         if isinstance(val, int):
             lines.append(f"  {label + ':':<28s} {val:>5}")
         else:
             lines.append(f"  {label + ':':<28s} {'ERR':>5}")
-    lines.append("\u2500" * 37)
+    lines.append("\u2500" * 44)
     lines.append(f"  {'Total issues:':<28s} {total_issues:>5}")
+    lines.append("")
+    lines.append("Retired (handled elsewhere):")
+    for _op, label, note in retired_dimensions:
+        lines.append(f"  {label + ':':<28s} {('n/a — ' + note):>12}")
 
     result = "\n".join(lines)
     session_buffer.record(
