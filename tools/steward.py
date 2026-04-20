@@ -331,6 +331,16 @@ def steward_preview(
     Examples:
         steward_preview("merge-duplicates", params='{"threshold": 0.9}')
         steward_preview("archive-stale", params='{"days_since_access": 60}')
+        steward_preview("delete-by-filter", params='{"keys": ["stale_fact_key"]}')
+        steward_preview("delete-by-filter", params='{"source_type": "note", "content_filter": "draft"}')
+
+    delete-by-filter accepts these filter params (at least one required):
+        keys: list of fact keys (source_type="fact" only)
+        item_ids: list of SM memory ids
+        content_filter: substring match against value/content
+        confidence_below: float threshold (fact only)
+        created_before: ISO date string
+        tags: list of tags (note only; all must match)
     """
     if operation not in _STEWARD_MUTATE_OPS:
         return (
