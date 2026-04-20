@@ -328,17 +328,76 @@ def _forget_fact(namespace: str, key: str, confirm: bool) -> str:
 
 
 def _forget_note(namespace: str, query: str, confirm: bool) -> str:
-    """Handle note deletion — redirects to UI for safety."""
+    """Delete a note by content substring match. Deletes the top match.
+
+    Pulls the most recent 200 notes from the backend (SM-backed), filters
+    to those whose content contains ``query`` case-insensitively, then
+    deletes the first one. Preview mode lists all matches so the caller
+    can confirm they'd hit the right note.
+    """
+    try:
+        with _client() as c:
+            r = c.get(
+                "/memory/notes",
+                params={"namespace": namespace, "limit": 200},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "forget")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (forget): cannot reach Cornerstone API — {e}"
+
+    notes = data.get("notes", [])
+    needle = (query or "").lower().strip()
+    matches = [
+        n for n in notes
+        if needle and needle in (n.get("content") or "").lower()
+    ]
+
+    if not matches:
+        return f"[{namespace}] No note found matching '{query}'"
+
     if not confirm:
-        return (
-            f"[{namespace}] To delete a specific note, use the Notes page in the UI "
-            f"or specify the exact note content.\n"
-            f"Note deletion by search query is available in the Cornerstone UI."
+        lines = [
+            f"[{namespace}] Found {len(matches)} note(s) matching '{query}':",
+        ]
+        for i, note in enumerate(matches[:5], 1):
+            preview = (note.get("content") or "").strip().replace("\n", " ")
+            if len(preview) > 120:
+                preview = preview[:120] + "..."
+            lines.append(f"  {i}. {preview}")
+        if len(matches) > 5:
+            lines.append(f"  ... and {len(matches) - 5} more")
+        lines.append(
+            f"\nCall forget(\"{query}\", type=\"note\", confirm=True) to delete "
+            f"the top match. For bulk deletes use "
+            f"steward_preview(\"delete-by-filter\", ...)."
         )
-    return (
-        f"[{namespace}] Note deletion by search requires the UI for safety. "
-        f"Use the Notes page to find and delete specific notes."
-    )
+        return "\n".join(lines)
+
+    # Confirmed — delete the top match.
+    note = matches[0]
+    note_id = note.get("id")
+    if not note_id:
+        return f"[{namespace}] Top match has no id — cannot delete"
+
+    try:
+        with _client() as c:
+            r = c.delete(
+                f"/memory/notes/{note_id}",
+                params={"namespace": namespace},
+            )
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return _format_http_error(e, "forget")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        return f"Error (forget): cannot reach Cornerstone API — {e}"
+
+    preview = (note.get("content") or "").strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:120] + "..."
+    return f"[{namespace}] Deleted note: {preview}"
 
 
 def _forget_search(namespace: str, query: str, confirm: bool) -> str:
