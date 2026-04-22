@@ -30,6 +30,7 @@ from pydantic import AnyHttpUrl, AnyUrl
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from mcp.server.auth import routes as _mcp_auth_routes
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationParams,
@@ -40,6 +41,30 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from auth import google
 
 logger = logging.getLogger("cornerstone.oauth")
+
+# ---------------------------------------------------------------------------
+# Patch MCP SDK discovery metadata
+# ---------------------------------------------------------------------------
+# The SDK hardcodes ``token_endpoint_auth_methods_supported`` to
+# ``["client_secret_post", "client_secret_basic"]`` in build_metadata.
+# Public clients (CLI tools attempting direct-MCP without a secret)
+# need ``"none"`` advertised so they know the AS accepts PKCE-only
+# auth. One-line override applied at import time, before FastMCP
+# constructs the well-known route.
+
+_original_build_metadata = _mcp_auth_routes.build_metadata
+
+
+def _build_metadata_with_none(*args, **kwargs):  # type: ignore[no-untyped-def]
+    metadata = _original_build_metadata(*args, **kwargs)
+    methods = list(metadata.token_endpoint_auth_methods_supported or [])
+    if "none" not in methods:
+        methods.append("none")
+        metadata.token_endpoint_auth_methods_supported = methods
+    return metadata
+
+
+_mcp_auth_routes.build_metadata = _build_metadata_with_none
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -227,17 +252,76 @@ class CornerstoneOAuthProvider(
     ]
 ):
     def __init__(self) -> None:
-        self._clients: dict[str, OAuthClientInformationFull] = {}
-        # Pending auth sessions: session_id -> {client, params, ...}
+        # DCR clients are persisted in Supabase via cornerstone-api
+        # (see /admin/oauth_clients/*). The in-memory _clients dict was
+        # the root cause of Claude Code cross-pod OAuth failures and is
+        # gone deliberately — do not reintroduce a local cache here
+        # without re-reading cornerstone_bug_claude_code_oauth first.
+        #
+        # Pending auth sessions stay in-memory because they're encoded
+        # as JWTs on the wire (see authorize()) — the dict is redundant
+        # but kept for any future server-side session state.
         self._auth_sessions: dict[str, dict[str, Any]] = {}
 
     # --- Client registration ---
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        return self._clients.get(client_id)
+        memory_api_key = MEMORY_API_KEY or os.environ.get("MEMORY_API_KEY", "")
+        if not memory_api_key:
+            logger.error("MEMORY_API_KEY not set — cannot fetch OAuth client")
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{CORNERSTONE_URL}/admin/oauth_clients/{client_id}",
+                    headers={"X-API-Key": memory_api_key},
+                )
+            if r.status_code == 404:
+                return None
+            if r.status_code != 200:
+                logger.error(
+                    "oauth_clients GET %s failed: %s %s",
+                    client_id,
+                    r.status_code,
+                    r.text[:200],
+                )
+                return None
+            row = r.json()
+            return OAuthClientInformationFull.model_validate(row["client_info"])
+        except Exception as e:
+            logger.error("oauth_clients GET exception for %s: %s", client_id, e)
+            return None
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
-        self._clients[client_info.client_id] = client_info
+        memory_api_key = MEMORY_API_KEY or os.environ.get("MEMORY_API_KEY", "")
+        if not memory_api_key:
+            logger.error("MEMORY_API_KEY not set — cannot persist OAuth client")
+            return
+        payload = {
+            "client_id": client_info.client_id,
+            "client_secret": client_info.client_secret or "",
+            "client_info": client_info.model_dump(mode="json"),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    f"{CORNERSTONE_URL}/admin/oauth_clients",
+                    headers={"X-API-Key": memory_api_key},
+                    json=payload,
+                )
+            if r.status_code != 200:
+                logger.error(
+                    "oauth_clients POST failed for %s: %s %s",
+                    client_info.client_id,
+                    r.status_code,
+                    r.text[:200],
+                )
+                return
+        except Exception as e:
+            logger.error(
+                "oauth_clients POST exception for %s: %s", client_info.client_id, e
+            )
+            return
         logger.info(
             "Registered OAuth client: %s (%s)",
             client_info.client_name,
