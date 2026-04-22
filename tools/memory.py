@@ -19,6 +19,8 @@ from core import (
     session_buffer,
 )
 
+from ._honcho_trailer import format_about_block, format_trailer
+
 
 # ---------------------------------------------------------------------------
 # remember
@@ -497,6 +499,7 @@ def get_context(
     stats = data.get("stats", {})
     tokens = stats.get("total_tokens", 0)
     used = stats.get("used_memory", [])
+    peer_card = stats.get("peer_card")
     summary_parts = [f"[workspace: {ns}]", context_text]
     if used:
         summary_parts.append(
@@ -504,6 +507,9 @@ def get_context(
         )
     if context_request_id:
         summary_parts.append(f"context_request_id: {context_request_id}")
+    trailer = format_trailer(peer_card)
+    if trailer:
+        summary_parts.append(trailer)
 
     tool_params: dict = {
         "query": query,
@@ -713,6 +719,9 @@ def search(query: str, namespace: str = "") -> str:
 
     stats = data.get("stats", {})
     used = stats.get("used_memory", [])
+    peer_card = stats.get("peer_card")
+    about_block = format_about_block(peer_card)
+    trailer = format_trailer(peer_card)
 
     if not used:
         session_buffer.record(
@@ -720,7 +729,13 @@ def search(query: str, namespace: str = "") -> str:
             tool_params={"query": query, "namespace": namespace},
             result_summary="No memory found",
         )
-        return f"[workspace: {ns}] No memory found matching: {query}"
+        parts = [f"[workspace: {ns}]"]
+        if about_block:
+            parts.append(about_block)
+        parts.append(f"No memory found matching: {query}")
+        if trailer:
+            parts.append(trailer)
+        return "\n".join(parts) if (about_block or trailer) else f"[workspace: {ns}] No memory found matching: {query}"
 
     # Group items by source_type
     grouped: dict[str, list] = {}
@@ -729,6 +744,8 @@ def search(query: str, namespace: str = "") -> str:
         grouped.setdefault(source_type, []).append(item)
 
     sections = [f"[workspace: {ns}]"]
+    if about_block:
+        sections.append(about_block)
     type_labels = {
         "fact": "Facts",
         "note": "Notes",
@@ -749,6 +766,9 @@ def search(query: str, namespace: str = "") -> str:
             if score is not None:
                 parts.append(f"[score: {score:.2f}]")
             sections.append(" ".join(parts))
+
+    if trailer:
+        sections.append(trailer)
 
     session_buffer.record(
         tool_name="search",
