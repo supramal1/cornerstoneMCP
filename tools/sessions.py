@@ -21,10 +21,12 @@ def save_conversation(
     topic: str | None = None,
     namespace: str = "",
 ) -> str:
-    """Save a conversation to memory. Cornerstone will extract key information,
-    create a summary, and link it to related conversations. Each save also
-    feeds the personalisation system, helping Cornerstone learn how each
-    team member works.
+    """Save a conversation to memory. Cornerstone stores the full exchange
+    as a session row, stages entities/relations for the knowledge graph,
+    and feeds the personalisation system so future sessions get better
+    context. Use add_fact() / remember() for discrete facts you want
+    surfaced directly — save_conversation captures the reasoning and
+    context around them.
 
     Only save business-relevant conversations. Do not save personal
     conversations (furniture shopping, cinema plans, recipes, personal
@@ -118,28 +120,19 @@ def save_conversation(
             f"for key items."
         )
 
-    # Async mode: extraction is processing in background
-    if status == "processing":
-        parts = [f"[{ns}] Conversation saved (session {session_id[:8]}...)."]
-        parts.append("  Extraction processing in background — memories will appear shortly.")
-    else:
-        parts = [f"[{ns}] Conversation saved (session {session_id[:8]}...):"]
-        parts.append(f"  Episodic memories: {episodic}")
-        parts.append(f"  Semantic memories: {semantic}")
-        if entities:
-            parts.append(f"  Entities staged: {entities}")
-        if relations:
-            parts.append(f"  Relations staged: {relations}")
+    # Note: episodic_count / semantic_count are always 0 since the backend
+    # stopped writing episodic/semantic rows (commit aced197, 2026-04-20).
+    # Honcho now carries conversation signal; Supermemory holds facts/notes.
+    # We suppress the zero counters so the response doesn't read as failure.
+    parts = [
+        f"[{ns}] Conversation saved (session {session_id[:8]}...): topic + summary captured."
+    ]
+    if entities:
+        parts.append(f"  Entities staged: {entities}")
+    if relations:
+        parts.append(f"  Relations staged: {relations}")
     if errors:
         parts.append(f"  Errors: {'; '.join(errors)}")
-
-    summary_note = []
-    if status != "processing" and episodic == 0 and semantic == 0 and entities == 0:
-        summary_note.append(
-            "Note: no memories extracted. The conversation may have been too "
-            "short or lacked durable information. Use remember() or add_fact() "
-            "for specific items."
-        )
 
     session_buffer.record(
         tool_name="save_conversation",
@@ -148,6 +141,6 @@ def save_conversation(
             "namespace": namespace,
             "message_count": len(messages),
         },
-        result_summary=f"Saved session {session_id[:8]}, {episodic} episodic, {semantic} semantic",
+        result_summary=f"Saved session {session_id[:8]} (entities={entities}, relations={relations})",
     )
-    return "\n".join(parts + summary_note)
+    return "\n".join(parts)
