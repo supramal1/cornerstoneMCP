@@ -27,7 +27,9 @@ Deployed to Google Cloud Run (europe-west2). See cornerstone repo for deploy scr
 OAuth 2.1 with JWT principal-based access control. Falls back to legacy API key auth.
 
 ## Configuration
-Required env vars: CORNERSTONE_URL, CORNERSTONE_API_KEY, OAUTH_JWT_SECRET, MCP_PUBLIC_URL
+Required env vars: CORNERSTONE_URL, CORNERSTONE_API_KEY, OAUTH_JWT_SECRET, MCP_PUBLIC_URL.
+
+Optional: `DISABLE_OAUTH=true` skips OAuth advertisement entirely (no `/.well-known/oauth-*`, no `WWW-Authenticate: Bearer ...`). Use when this MCP is fronted by a gateway (e.g. obot) that owns user auth and proxies inbound traffic without an `Authorization` header. Backend calls still authenticate via `CORNERSTONE_API_KEY`.
 
 ## Tools
 

@@ -462,10 +462,16 @@ def _looks_like_fact_key(query: str) -> bool:
 # MCP server setup
 # ---------------------------------------------------------------------------
 
-_oauth_provider = CornerstoneOAuthProvider()
+# When DISABLE_OAUTH=true the MCP server skips OAuth advertisement entirely
+# (no `/.well-known/oauth-*`, no `WWW-Authenticate: Bearer ...` on 401). Use
+# when this MCP is fronted by a gateway (e.g. obot) that owns user auth and
+# proxies inbound traffic without an `Authorization` header. Backend calls
+# still authenticate via CORNERSTONE_API_KEY in the container env.
+DISABLE_OAUTH = os.environ.get("DISABLE_OAUTH", "").lower() == "true"
 
-mcp = FastMCP(
-    "cornerstone",
+_oauth_provider = None if DISABLE_OAUTH else CornerstoneOAuthProvider()
+
+_mcp_kwargs: dict = dict(
     instructions=(
         "Long-term memory backed by Cornerstone. "
         "Store and retrieve facts, notes, and context. "
@@ -474,10 +480,13 @@ mcp = FastMCP(
         "switch_workspace, set_default_workspace) to manage multi-workspace sessions."
     ),
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    auth_server_provider=_oauth_provider,
     stateless_http=True,
     streamable_http_path="/",
-    auth=AuthSettings(
+)
+
+if not DISABLE_OAUTH:
+    _mcp_kwargs["auth_server_provider"] = _oauth_provider
+    _mcp_kwargs["auth"] = AuthSettings(
         issuer_url=AnyHttpUrl(MCP_PUBLIC_URL),
         resource_server_url=AnyHttpUrl(MCP_PUBLIC_URL),
         required_scopes=["memory"],
@@ -486,10 +495,12 @@ mcp = FastMCP(
             valid_scopes=["memory"],
             default_scopes=["memory"],
         ),
-    ),
-)
+    )
 
-register_login_routes(mcp)
+mcp = FastMCP("cornerstone", **_mcp_kwargs)
+
+if not DISABLE_OAUTH:
+    register_login_routes(mcp)
 
 # ---------------------------------------------------------------------------
 # Friendly error handling for tool validation errors
