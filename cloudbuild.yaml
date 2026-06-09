@@ -1,0 +1,42 @@
+# Cloud Build config for cornerstone-mcp.
+#
+# Runtime env vars and Secret Manager bindings live in scripts/deploy.sh,
+# not here. This config is for Cloud Build triggers (future).
+
+timeout: 1800s
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REGION: us-central1
+  _SERVICE_NAME: cornerstone-mcp
+  _IMAGE_URI: us-central1-docker.pkg.dev/cornerstone-489916/cloud-run-source-deploy/cornerstone-mcp
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=GIT_SHA=$COMMIT_SHA
+      - -t
+      - ${_IMAGE_URI}:$COMMIT_SHA
+      - .
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE_URI}:$COMMIT_SHA
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image=${_IMAGE_URI}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --quiet
+
+images:
+  - ${_IMAGE_URI}:$COMMIT_SHA
