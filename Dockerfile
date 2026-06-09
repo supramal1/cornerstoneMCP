@@ -7,4 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python", "server.py", "--transport", "http", "--port", "8080"]
+CMD python server.py --transport http --port ${PORT:-8080}

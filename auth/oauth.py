@@ -81,11 +81,11 @@ if not JWT_SECRET:
 # Public URL of this MCP server (for issuer_url / resource_server_url)
 MCP_PUBLIC_URL = os.environ.get(
     "MCP_PUBLIC_URL",
-    "https://cornerstone-mcp-34862349933.europe-west2.run.app",
+    "https://cornerstone-mcp-34862349933.us-central1.run.app",
 )
 
 # Cornerstone backend URL (for validating API keys)
-CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "http://127.0.0.1:8000")
+CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "")
 
 # Cornerstone backend superuser key (used for resolve-email bridge call only).
 # TODO: Replace with a scoped service token in a follow-up sprint.
@@ -816,9 +816,10 @@ def register_login_routes(mcp_server: Any) -> None:
     ) -> tuple[dict | None, int]:
         """Returns (data, status_code). 403 means no invitation found."""
         memory_api_key = MEMORY_API_KEY or os.environ.get("MEMORY_API_KEY", "")
-        cornerstone_url = CORNERSTONE_URL or os.environ.get(
-            "CORNERSTONE_URL", "http://127.0.0.1:8000"
-        )
+        cornerstone_url = CORNERSTONE_URL
+        if not cornerstone_url:
+            logger.error("CORNERSTONE_URL not set — cannot call resolve-email")
+            return None, 500
         if not memory_api_key:
             logger.error("MEMORY_API_KEY not set — cannot call resolve-email")
             return None, 500

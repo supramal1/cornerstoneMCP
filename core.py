@@ -42,7 +42,7 @@ logger = logging.getLogger("cornerstone.mcp")
 # Configuration — from environment variables
 # ---------------------------------------------------------------------------
 
-CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "http://127.0.0.1:8000")
+CORNERSTONE_URL = os.environ.get("CORNERSTONE_URL", "")
 CORNERSTONE_API_KEY = os.environ.get(
     "CORNERSTONE_API_KEY", os.environ.get("MEMORY_API_KEY", "")
 )
@@ -586,4 +586,11 @@ def _headers() -> dict[str, str]:
 
 
 def _client() -> httpx.Client:
-    return httpx.Client(base_url=CORNERSTONE_URL, headers=_headers(), timeout=30)
+    if not CORNERSTONE_URL:
+        raise RuntimeError(
+            "CORNERSTONE_URL env var must be set; cornerstone-mcp cannot reach the API."
+        )
+    # 120s timeout accommodates Graphiti's LLM-based entity extraction
+    # on free-text bodies (notes can take 10-30s per Gemini round-trip).
+    # Previously 30s, which timed out on freeform add_note calls.
+    return httpx.Client(base_url=CORNERSTONE_URL, headers=_headers(), timeout=120)
