@@ -63,4 +63,14 @@ Optional: `DISABLE_OAUTH=true` skips OAuth advertisement entirely (no `/.well-kn
 | list_threads | See conversation threads |
 | report_context_feedback | Rate retrieval quality |
 
+### Review (MC-2 propose-then-approve)
+
+| Tool | Purpose |
+|------|---------|
+| mc_list_proposals | List agent-proposed facts awaiting human review |
+| mc_promote_facts | Promote proposed facts to current memory |
+| mc_reject_facts | Reject proposed facts (reason required, stored verbatim) |
+
+Promote/reject relay the gateway-injected `X-Forwarded-User-Email` header on the outbound API call so the decision is attributed to the human reviewer. Absent the header (e.g. stdio), the decision is recorded without a forwarded identity.
+
 Most users only need `remember` and `recall`. The advanced tools give you more control when you need it.
