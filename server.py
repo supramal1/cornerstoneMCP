@@ -28,6 +28,7 @@ import tools.retrieval  # noqa: F401 — list_facts, list_notes, get_recent_sess
 import tools.sessions  # noqa: F401 — save_conversation
 import tools.steward  # noqa: F401 — steward_inspect, steward_advise, steward_preview, steward_apply, steward_status
 import tools.identity  # noqa: F401 — update_identity_anchor
+import tools.proposals  # noqa: F401 — mc_list_proposals, mc_promote_facts, mc_reject_facts
 
 
 # ---------------------------------------------------------------------------
